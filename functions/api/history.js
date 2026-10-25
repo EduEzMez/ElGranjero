@@ -11,12 +11,14 @@ export async function onRequestGet({ env, request }) {
 
   const url = new URL(request.url);
   const id = Number(url.searchParams.get("farm")) || 441;
+  const tz = url.searchParams.get("tz") || "America/Argentina/Buenos_Aires";
+  const dayOf = (ms) => new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
   const now = Date.now();
   const iso = (ms) => new Date(ms).toISOString();
 
   const [snaps, prices, sales, meta, timers] = await Promise.all([
     db.prepare("SELECT day, taken_at, coins, flower, activity FROM snapshots WHERE farm_id = ? ORDER BY day DESC LIMIT 35").bind(id).all(),
-    db.prepare("SELECT taken_at, flower_usd, prices FROM prices WHERE taken_at >= ? ORDER BY taken_at").bind(iso(now - 14 * 86400e3)).all(),
+    db.prepare("SELECT taken_at, flower_usd, prices FROM prices WHERE taken_at >= ? ORDER BY taken_at").bind(iso(now - 40 * 86400e3)).all(),
     db.prepare("SELECT id, fulfilled_at, items, flower, tax FROM sales WHERE farm_id = ? AND fulfilled_at >= ? ORDER BY fulfilled_at DESC").bind(id, now - 60 * 86400e3).all(),
     db.prepare("SELECT key, value FROM meta").all(),
     db.prepare("SELECT label, ready_at, notified FROM timers WHERE farm_id = ? AND ready_at >= ? ORDER BY ready_at LIMIT 30").bind(id, now - 3600e3).all(),
@@ -45,10 +47,19 @@ export async function onRequestGet({ env, request }) {
     priceStats[k] = { current: s.current, avg: s.sum / s.n, min: s.min, max: s.max, samples: s.n };
   }
 
-  // Serie de FLOWER cada ~4 h.
+  // Precio promedio de FLOWER por día (para valuar lo ganado cada día).
+  const daily = {};
+  for (const r of rows) {
+    if (!r.usd) continue;
+    const d = dayOf(r.t);
+    (daily[d] ||= []).push(r.usd);
+  }
+  const flowerDaily = Object.fromEntries(Object.entries(daily).map(([d, v]) => [d, v.reduce((a, b) => a + b, 0) / v.length]));
+
+  // Serie de FLOWER cada ~4 h (14 días).
   const flowerSeries = [];
   let lastT = 0;
-  for (const r of rows) {
+  for (const r of rows.filter((x) => x.t >= now - 14 * 86400e3)) {
     if (r.usd && r.t - lastT >= 4 * 3600e3) {
       flowerSeries.push({ t: r.t, usd: r.usd });
       lastT = r.t;
@@ -59,6 +70,7 @@ export async function onRequestGet({ env, request }) {
     days,
     priceStats,
     flowerSeries,
+    flowerDaily,
     sales: (sales.results || []).map((s) => ({ id: s.id, at: s.fulfilled_at, items: safe(s.items), flower: s.flower, tax: s.tax })),
     timers: (timers.results || []).map((t) => ({ label: t.label, readyAt: t.ready_at, notified: !!t.notified })),
     cron: Object.fromEntries((meta.results || []).map((m) => [m.key, m.value])),
