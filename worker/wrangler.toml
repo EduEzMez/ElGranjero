@@ -10,7 +10,7 @@ crons = ["*/5 * * * *"] # cada 5 minutos
 [[d1_databases]]
 binding = "DB"
 database_name = "dongranjero"
-database_id = "PEGAR_ACA_EL_ID_DE_D1"
+database_id = "8467dfee-6d91-4d8d-a389-2e14641a6deb"
 
 [vars]
 FARM_ID = "441"
