@@ -1,9 +1,8 @@
 // GET /api/farm/:id
-// Orden de búsqueda:
-//   1. Base D1 (la actualiza el Worker programado): si tiene menos de FARM_DB_MAX_AGE_MIN, se usa directo.
-//   2. Caché del edge (5 minutos).
-//   3. Community API de Sunflower Land (con SFL_API_KEY).
-//   4. Si la API limita (429) o falla: última copia de D1 o del edge, marcada como "stale".
+// Con la base D1 conectada, la web SOLO lee de la base: el Worker programado es el único
+// que consulta la API de Sunflower Land, así no compiten por el límite de consultas.
+// La web consulta la API directo solo si la base todavía no tiene ninguna foto de la granja
+// (o si no hay base conectada). En ese caso usa caché de 5 minutos y respaldo ante 429.
 import { fetchFarmUpstream, readLatestFarm, writeLatestFarm } from "../../../shared/sfl.js";
 
 const STALE_SECONDS = 86400;
@@ -16,10 +15,11 @@ export async function onRequestGet({ params, env, request, waitUntil }) {
   const fresh = Number(env.FARM_CACHE_SECONDS) || 300;
   const dbMaxAge = (Number(env.FARM_DB_MAX_AGE_MIN) || 35) * 60e3;
 
-  // 1. D1
+  // 1. D1: si hay foto, se usa siempre. Si es vieja, se marca "stale" pero no se consulta la API.
   const stored = await readLatestFarm(db, id).catch(() => null);
-  if (stored && Date.now() - Date.parse(stored.fetchedAt) < dbMaxAge) {
-    return json({ ...stored, source: "d1" }, 200, 60);
+  if (stored) {
+    const old = Date.now() - Date.parse(stored.fetchedAt) >= dbMaxAge;
+    return json({ ...stored, source: "d1", ...(old ? { stale: true } : {}) }, 200, 60);
   }
 
   // 2. Edge
