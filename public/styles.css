@@ -372,3 +372,53 @@ input[type="range"] { padding: 0; accent-color: var(--grass); border: 0; backgro
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Calendario mensual ---------- */
+.cal { margin-top: 1rem; padding: .9rem 1rem 1rem; background: var(--surface); border: 2px solid var(--edge); border-radius: 10px; box-shadow: 0 3px 0 var(--edge); }
+.cal-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.cal-head h3 { margin: 0; text-transform: capitalize; }
+.cal-sum { font: 600 1rem var(--display); }
+.cal .hint { margin: .4rem 0 .7rem; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.cal-wd { text-align: center; font-size: .7rem; color: var(--muted); font-weight: 700; padding-bottom: 2px; }
+.cal-day {
+  position: relative; min-height: 64px; padding: 3px 3px 4px; border-radius: 7px; cursor: pointer;
+  border: 2px solid var(--line); background: var(--surface-2); color: var(--ink);
+  display: flex; flex-direction: column; align-items: center; justify-content: space-between; gap: 1px;
+  font: inherit; text-align: center; min-width: 0; overflow: hidden;
+}
+.cal-day .dn { align-self: flex-start; font: 600 .78rem var(--display); line-height: 1; }
+.cal-day .px { width: 24px; height: 24px; }
+.cal-day .amt { font-size: .68rem; font-weight: 700; line-height: 1.1; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.cal-day .wt { position: absolute; top: 2px; right: 3px; font-size: .58rem; font-weight: 700; color: var(--muted); }
+.cal-day.done { background: var(--leaf-soft); border-color: var(--grass-dark); }
+.cal-day.partial { background: var(--sun-soft); border-color: var(--sun); }
+.cal-day.missed { background: var(--berry-soft); border-color: var(--berry); }
+.cal-day.missed .amt { color: var(--berry); }
+.cal-day.nodata { opacity: .45; border-style: dashed; cursor: default; }
+.cal-day.future .amt { color: var(--muted); }
+.cal-day.off { background: repeating-linear-gradient(45deg, var(--surface-2) 0 6px, var(--surface) 6px 12px); }
+.cal-day.demanding { border-color: var(--sun); }
+.cal-day.today, .cal-day.today-done { border: 3px solid var(--edge); box-shadow: 0 2px 0 var(--edge); }
+.cal-day.today-done { background: var(--leaf-soft); }
+.cal-day[aria-selected="true"] { outline: 3px solid var(--sun); outline-offset: 1px; }
+.cal-day .prog { width: 100%; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.cal-day .prog i { display: block; height: 100%; background: var(--grass); }
+.cal-legend { display: flex; flex-wrap: wrap; gap: .3rem .8rem; margin: .7rem 0 0; font-size: .76rem; color: var(--muted); }
+.cal-legend span { display: inline-flex; align-items: center; gap: .25rem; }
+.cal-detail { margin-top: .8rem; padding: .8rem .9rem; border-radius: 8px; background: var(--surface-2); border: 2px solid var(--line); }
+.cal-detail:empty { display: none; }
+.cal-detail h4 { margin: 0 0 .35rem; font: 600 1.05rem var(--display); display: flex; align-items: center; gap: .4rem; }
+.cal-detail p { margin: .25rem 0; font-size: .92rem; }
+.cal-detail ul { margin: .35rem 0 0; padding: 0; list-style: none; display: grid; gap: .3rem; }
+.cal-detail li { display: flex; align-items: center; gap: .45rem; font-size: .9rem; }
+.cal-detail .bigbar { height: 12px; border-radius: 3px; background: var(--line); overflow: hidden; margin: .4rem 0; border: 1px solid var(--edge); }
+.cal-detail .bigbar i { display: block; height: 100%; background: repeating-linear-gradient(90deg, var(--grass) 0 6px, var(--grass-dark) 6px 8px); }
+.seg { display: inline-flex; border: 2px solid var(--edge); border-radius: 9px; overflow: hidden; margin-top: .5rem; }
+.seg button { border: 0; background: var(--surface); color: var(--ink); padding: .4rem .75rem; font: 700 .85rem var(--body); cursor: pointer; min-height: 38px; }
+.seg button + button { border-left: 2px solid var(--edge); }
+.seg button.on { background: var(--grass); color: #fff; }
+@media (max-width: 380px) { .cal-day { min-height: 56px; } .cal-day .amt { font-size: .6rem; } .cal-day .px { width: 20px; height: 20px; } }
+@media (max-width: 480px) {
+  .cal-day .wt { font-size: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--sun); border: 1px solid var(--edge); top: 4px; right: 4px; }
+}
