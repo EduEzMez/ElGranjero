@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>DonGranjero · Rentabilidad de tu granja en Sunflower Land</title>
+  <meta name="description" content="Qué recurso conviene explotar en tu granja de Sunflower Land para llegar a tu meta mensual en dólares.">
+  <meta name="theme-color" content="#EEF2E4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#11160F" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌻</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <h1>DonGranjero</h1>
+        <p class="sub" id="farmLine">Granja #441</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span class="price-pill" id="flowerPill" title="Precio de FLOWER en USD"><span class="pill-k">FLOWER</span> <span id="flowerPrice">–</span></span>
+      <button class="btn-icon" id="refreshBtn" type="button" aria-label="Actualizar datos">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="status" id="statusBar" role="status" aria-live="polite"></div>
+
+  <div class="layout">
+    <nav class="tabs" aria-label="Secciones">
+      <button type="button" data-tab="resumen" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Meta</span></button>
+      <button type="button" data-tab="ranking"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h11M4 18h6"/></svg><span>Ranking</span></button>
+      <button type="button" data-tab="inversion"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M17 7H9.5a3 3 0 0 0 0 6h5a3 3 0 0 1 0 6H6"/></svg><span>Inversión</span></button>
+      <button type="button" data-tab="granja"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 21V10l9-6 9 6v11M9 21v-6h6v6"/></svg><span>Granja</span></button>
+      <button type="button" data-tab="ajustes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4"/></svg><span>Ajustes</span></button>
+    </nav>
+
+    <main>
+      <!-- META -->
+      <section class="view active" id="view-resumen" aria-labelledby="t-resumen">
+        <h2 id="t-resumen" class="sr-only">Meta mensual</h2>
+        <div class="goal">
+          <div class="goal-head">
+            <label class="goal-input">
+              <span>Meta por mes</span>
+              <span class="money"><span aria-hidden="true">US$</span><input id="targetUsd" type="number" inputmode="decimal" min="1" step="1" aria-label="Meta mensual en dólares"></span>
+            </label>
+            <div class="goal-proj">
+              <span>Proyección</span>
+              <strong id="projUsd">–</strong>
+            </div>
+          </div>
+          <div class="plotmeter" id="plotMeter" role="img" aria-label="Avance hacia la meta"></div>
+          <p class="goal-note" id="goalNote"></p>
+          <dl class="kpis">
+            <div><dt>FLOWER neto por día</dt><dd id="kFlowerDay">–</dd></div>
+            <div><dt>Necesitás por día</dt><dd id="kNeeded">–</dd></div>
+            <div><dt>Coins por día en semillas y herramientas</dt><dd id="kCoins">–</dd></div>
+          </dl>
+        </div>
+
+        <div class="block">
+          <h3>Qué te conviene hacer</h3>
+          <ul class="advice" id="advice"></ul>
+        </div>
+
+        <div class="block">
+          <h3>Plan de siembra del día</h3>
+          <p class="hint" id="planHint"></p>
+          <ol class="plan" id="plan"></ol>
+        </div>
+      </section>
+
+      <!-- RANKING -->
+      <section class="view" id="view-ranking" aria-labelledby="t-ranking">
+        <h2 id="t-ranking">Qué rinde más</h2>
+        <p class="hint">Ganancia neta después de la comisión del Marketplace y de los insumos (semillas, herramientas, alimento) valuados a precio de mercado.</p>
+        <div class="chips" id="rankFilter" role="group" aria-label="Filtrar por tipo">
+          <button type="button" data-f="all" class="on">Todo</button>
+          <button type="button" data-f="crop">Cultivos</button>
+          <button type="button" data-f="fruit">Frutas</button>
+          <button type="button" data-f="node">Minería y madera</button>
+          <button type="button" data-f="animal">Animales</button>
+        </div>
+        <ul class="rank" id="rankList"></ul>
+
+        <h3 class="mt">Si plantaras un solo cultivo</h3>
+        <p class="hint">Comparación con todas tus parcelas en el mismo cultivo, al ritmo de sesiones que configuraste.</p>
+        <div class="table-wrap"><table class="tbl" id="singleTbl"></table></div>
+
+        <h3 class="mt">Frutas</h3>
+        <div class="table-wrap"><table class="tbl" id="fruitTbl"></table></div>
+      </section>
+
+      <!-- INVERSION -->
+      <section class="view" id="view-inversion" aria-labelledby="t-inversion">
+        <h2 id="t-inversion">Reinversión</h2>
+        <p class="hint">Cargá boosts que estés pensando comprar. La app calcula cuánto suman por mes en tu granja y en cuántos días se pagan.</p>
+        <label class="field inline">
+          <span>Presupuesto mensual para reinvertir (US$)</span>
+          <input id="budgetUsd" type="number" inputmode="decimal" min="0" step="1">
+        </label>
+        <p class="hint" id="budgetFlower"></p>
+
+        <form class="card-form" id="candForm" autocomplete="off">
+          <h3>Agregar boost candidato</h3>
+          <div class="grid2">
+            <label class="field"><span>Nombre</span><input name="name" required placeholder="Ej: Kuebiko"></label>
+            <label class="field"><span>Precio (FLOWER)</span><input name="cost" type="number" step="any" min="0" required></label>
+            <label class="field"><span>Afecta a</span><select name="target" id="candTarget"></select></label>
+            <label class="field"><span>+% rendimiento</span><input name="yieldPct" type="number" step="any" value="0"></label>
+            <label class="field"><span>+unidades por cosecha</span><input name="yieldAdd" type="number" step="any" value="0"></label>
+            <label class="field"><span>% de tiempo (−20 = 20% más rápido)</span><input name="timePct" type="number" step="any" value="0"></label>
+          </div>
+          <button class="btn" type="submit">Agregar candidato</button>
+        </form>
+        <ul class="cands" id="candList"></ul>
+      </section>
+
+      <!-- GRANJA -->
+      <section class="view" id="view-granja" aria-labelledby="t-granja">
+        <h2 id="t-granja">Tu granja</h2>
+        <form class="farm-id" id="farmForm">
+          <label class="field inline"><span>Número de granja</span><input id="farmId" type="number" inputmode="numeric" min="1" required></label>
+          <button class="btn" type="submit">Cargar granja</button>
+        </form>
+        <dl class="facts" id="farmFacts"></dl>
+
+        <h3 class="mt">Cantidades</h3>
+        <p class="hint">Detectadas desde la API. Si algo no coincide con lo que ves en el juego, corregilo acá.</p>
+        <div class="grid3" id="countsGrid"></div>
+
+        <h3 class="mt">Animales</h3>
+        <div id="animalCfg" class="grid2"></div>
+
+        <h3 class="mt">Boosts activos</h3>
+        <ul class="boosts" id="boostList"></ul>
+
+        <details class="disclose">
+          <summary>Items de tu granja sin boost cargado</summary>
+          <p class="hint">Si alguno da un boost a la producción, cargalo como boost manual.</p>
+          <div class="tags" id="unknownItems"></div>
+        </details>
+
+        <form class="card-form" id="boostForm" autocomplete="off">
+          <h3>Agregar boost manual</h3>
+          <div class="grid2">
+            <label class="field"><span>Nombre</span><input name="name" required></label>
+            <label class="field"><span>Afecta a</span><select name="target" id="boostTarget"></select></label>
+            <label class="field"><span>+% rendimiento</span><input name="yieldPct" type="number" step="any" value="0"></label>
+            <label class="field"><span>+unidades por cosecha</span><input name="yieldAdd" type="number" step="any" value="0"></label>
+            <label class="field"><span>% de tiempo</span><input name="timePct" type="number" step="any" value="0"></label>
+          </div>
+          <button class="btn" type="submit">Agregar boost</button>
+        </form>
+      </section>
+
+      <!-- AJUSTES -->
+      <section class="view" id="view-ajustes" aria-labelledby="t-ajustes">
+        <h2 id="t-ajustes">Ajustes</h2>
+
+        <h3>Tu forma de jugar</h3>
+        <label class="field">
+          <span>Sesiones por día: <strong id="sessionsOut"></strong></span>
+          <input id="sessions" type="range" min="1" max="12" step="1">
+        </label>
+        <div class="grid2">
+          <label class="field"><span>Primera sesión (hora)</span><input id="firstHour" type="number" min="0" max="23" step="1"></label>
+          <label class="field"><span>Última sesión (hora)</span><input id="lastHour" type="number" min="0" max="23" step="1"></label>
+        </div>
+
+        <h3 class="mt">Costos y conversión</h3>
+        <div class="grid2">
+          <label class="field"><span>Comisión del Marketplace (%)</span><input id="marketFee" type="number" step="any" min="0" max="100"></label>
+          <label class="field"><span>Costo de pasar a USD (%)</span><input id="cashoutFee" type="number" step="any" min="0" max="100"></label>
+          <label class="field"><span>FLOWER en USD (vacío = automático)</span><input id="flowerUsdOverride" type="number" step="any" min="0"></label>
+          <label class="field"><span>Valor de 1 coin en FLOWER</span><input id="coinToFlower" type="number" step="any" min="0"></label>
+        </div>
+        <p class="hint">Con el valor del coin en 0, las semillas y herramientas se muestran como coins por día y no se descuentan del FLOWER.</p>
+
+        <h3 class="mt">Cultivos habilitados</h3>
+        <p class="hint" id="seasonHint"></p>
+        <div class="tags selectable" id="cropToggles"></div>
+        <button class="btn ghost" id="autoSeason" type="button">Usar los de la estación actual</button>
+
+        <h3 class="mt">Precios y liquidez</h3>
+        <p class="hint">Precio piso en FLOWER por unidad. Escribí un valor para fijarlo a mano. En liquidez, cuántas unidades por día creés que el mercado absorbe sin bajar el precio.</p>
+        <div class="table-wrap"><table class="tbl prices" id="priceTbl"></table></div>
+
+        <h3 class="mt">Datos sin conexión</h3>
+        <details class="disclose">
+          <summary>Pegar el JSON de la granja a mano</summary>
+          <p class="hint">Útil si la API no responde. Pegá la respuesta de la Community API.</p>
+          <textarea id="pasteJson" rows="6" spellcheck="false"></textarea>
+          <button class="btn" id="pasteBtn" type="button">Usar este JSON</button>
+        </details>
+
+        <div class="row-actions">
+          <button class="btn ghost" id="exportBtn" type="button">Exportar ajustes</button>
+          <label class="btn ghost file">Importar ajustes<input id="importFile" type="file" accept="application/json"></label>
+          <button class="btn danger" id="resetBtn" type="button">Restablecer todo</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="foot">
+    <p>Estimaciones con datos públicos y supuestos editables. No es asesoramiento financiero.</p>
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
