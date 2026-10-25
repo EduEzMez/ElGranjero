@@ -131,6 +131,8 @@ export function detectFarm(raw) {
     flower: Number(f.balance) || 0,
     username: f.username ?? null,
     vipUntil: f.vip?.expiresAt ?? null,
+    timezone: f.settings?.timezone || "America/Argentina/Buenos_Aires",
+    raw: f,
   };
 }
 
@@ -384,6 +386,7 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
         applied: o.applied,
         timeSource: o.timeSource,
         seedsDay: h * plots,
+        harvestsDay: h * plots,
         detail: `${fmt(h, 2)} cosechas por parcela al día`,
       });
     }
@@ -419,6 +422,7 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
       cycleMin,
       applied: m.applied,
       timeSource: tm.source,
+      harvestsDay: h * patches,
       detail: `${fmt(h, 2)} cosechas por parche al día`,
     });
   }
@@ -463,6 +467,7 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
       cycleMin,
       applied: m.applied,
       timeSource: tm.source,
+      harvestsDay: h * k,
       detail: `${nd.tool.name} por golpe`,
       unknownMats,
     });
@@ -497,6 +502,7 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
       cycleMin: cycleH * 60,
       applied: m.applied,
       timeSource: useReal && detected.animalCycle?.[an.name] ? "real" : "tabla",
+      harvestsDay: k * perDayFactor,
       detail: `alimento: ${cfgA.feedQty} ${LABELS[cfgA.feedItem] || cfgA.feedItem} por animal y ciclo`,
       unknownMats: fp === null ? [cfgA.feedItem] : [],
     });
@@ -528,6 +534,8 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
     boosts,
     missingPrices: [...missingPrices],
     feePct,
+    fee,
+    price,
     rapidRoot,
     totals: { netFlowerDay, coinsDay, usdMonth, neededFlowerDay, flowerUsd, usdPerFlower },
   };

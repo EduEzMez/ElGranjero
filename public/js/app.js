@@ -1,5 +1,6 @@
 import { CROPS, FRUITS, NODES, ANIMALS, BOOSTS, DEFAULTS, LABELS, CATEGORY_LABEL, SEASON_CROPS, SEASON_LABEL } from "./data.js";
 import { compute, detectFarm, fmt } from "./engine.js";
+import { analyzeDeliveries, analyzeInventory, reservedByDeliveries, upcomingEvents, coinBounties, historyMetrics } from "./insights.js";
 
 const LS_STATE = "dongranjero:state:v1";
 const LS_FARM = "dongranjero:farm:v1";
@@ -16,6 +17,9 @@ let farmPayload = readLS(LS_FARM); // { fetchedAt, data }
 let market = readLS(LS_MARKET); // { prices, flowerUsd, ... }
 let detected = farmPayload ? detectFarm(farmPayload.data) : null;
 let result = null;
+let history = null; // respuesta de /api/history
+let historyError = "";
+let insights = { deliveries: [], inventory: { rows: [], total: 0 }, events: [], bounties: [], metrics: null };
 let rankFilter = "all";
 const status = { farm: "", market: "" };
 
@@ -106,11 +110,28 @@ async function loadMarket() {
   }
 }
 
+async function loadHistory() {
+  try {
+    const res = await fetch(`/api/history?farm=${encodeURIComponent(state.farmId)}`);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `Error ${res.status}`);
+    history = body;
+    historyError = "";
+  } catch (err) {
+    history = null;
+    historyError = err.message;
+  }
+}
+
+function todayIn(tz) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: tz || "America/Argentina/Buenos_Aires", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
 async function refreshAll(force = false) {
   const btn = $("#refreshBtn");
   btn.classList.add("spin");
   btn.disabled = true;
-  await Promise.all([loadFarm(state.farmId, { force }), loadMarket()]);
+  await Promise.all([loadFarm(state.farmId, { force }), loadMarket(), loadHistory()]);
   btn.classList.remove("spin");
   btn.disabled = false;
   recompute(true);
@@ -120,6 +141,7 @@ async function refreshAll(force = false) {
 
 function recompute(animate = false) {
   result = compute({ state, detected, market });
+  buildInsights();
   renderHeader();
   renderStatus();
   renderGoal(animate);
@@ -131,6 +153,25 @@ function recompute(animate = false) {
   renderInvestment();
   renderFarm();
   renderSettings();
+  renderEvents();
+  renderSell();
+  renderHistory();
+}
+
+function buildInsights() {
+  const farm = detected?.raw;
+  const today = todayIn(detected?.timezone);
+  const priceFn = (n) => result.price(n);
+  const deliveries = farm ? analyzeDeliveries(farm, { price: priceFn, fee: result.fee, today }) : [];
+  const reserved = reservedByDeliveries(deliveries);
+  insights = {
+    today,
+    deliveries,
+    inventory: farm ? analyzeInventory(farm, { price: priceFn, fee: result.fee, liquidity: state.liquidity, reserved, stats: history?.priceStats }) : { rows: [], total: 0 },
+    events: farm ? upcomingEvents(farm, today) : [],
+    bounties: farm ? coinBounties(farm) : [],
+    metrics: historyMetrics(history),
+  };
 }
 
 let timer;
@@ -278,6 +319,37 @@ function renderAdvice() {
     }
   }
 
+  const m = insights.metrics;
+  if (m && t.usdPerFlower) {
+    const realUsd = m.earnedPerDay * 30 * t.usdPerFlower;
+    add(
+      `En los últimos ${fmt(m.span, 0)} días ganaste <strong>${fmt(m.earnedPerDay, 2)} FLOWER por día</strong> (≈ US$ ${fmt(realUsd, 2)}/mes) según los contadores del juego.${
+        t.usdMonth ? ` El plan proyecta US$ ${fmt(t.usdMonth, 2)}/mes: ${realUsd >= t.usdMonth * 0.9 ? "vas en línea" : "hay margen para mejorar el ritmo"}.` : ""
+      }`,
+      realUsd >= state.targetUsd ? "" : "warn"
+    );
+  }
+  const todayDouble = insights.events.find((e) => e.today && e.name === "doubleDelivery");
+  const nextDouble = insights.events.find((e) => !e.today && e.name === "doubleDelivery");
+  if (todayDouble) add("<strong>Hoy hay entregas dobles.</strong> Priorizá las entregas que pagan FLOWER antes de vender al Marketplace.");
+  else if (nextDouble) add(`Próximas entregas dobles: <strong>${esc(fmtDate(nextDouble.date))}</strong>. Conviene guardar ingredientes para ese día.`);
+  const bestDeliv = insights.deliveries.find((d) => d.kind === "flower" && d.margin > 0);
+  if (bestDeliv) add(`La entrega de <strong>${esc(bestDeliv.from)}</strong> paga ${fmt(bestDeliv.rewardFlower, 2)} FLOWER, ${fmt(bestDeliv.margin, 2)} más que vender sus ingredientes. Detalle en Vender.`);
+  if (insights.inventory.total > 0) {
+    const top = insights.inventory.rows.slice(0, 3).map((r) => esc(label(r.item))).join(", ");
+    add(`Tu inventario vendible vale unos <strong>${fmt(insights.inventory.total, 2)} FLOWER</strong>${t.usdPerFlower ? ` (≈ US$ ${fmt(insights.inventory.total * t.usdPerFlower, 2)})` : ""}. Lo de más valor: ${top}.`);
+  }
+  if (detected && t.coinsDay > 0) {
+    const days = detected.coins / t.coinsDay;
+    const netCoins = m ? m.coinsInPerDay - m.coinsOutPerDay : null;
+    add(
+      `Tus ${fmt(detected.coins, 0)} coins alcanzan para unos <strong>${fmt(days, 1)} días</strong> del plan.${
+        netCoins !== null ? ` En la última semana tu saldo de coins ${netCoins >= 0 ? "subió" : "bajó"} ${fmt(Math.abs(netCoins), 0)} por día.` : ""
+      }`,
+      days < 3 ? "warn" : ""
+    );
+  }
+
   for (const s of result.streams.filter((x) => x.category === "crop" && x.seedsDay)) {
     const stock = Number(detected?.seedStock?.[`${s.name} Seed`]);
     if (stock > 0 && s.seedsDay > stock) {
@@ -293,8 +365,8 @@ function renderAdvice() {
   if (result.missingPrices.length) {
     add(`Sin precio de mercado: ${result.missingPrices.map((n) => esc(label(n))).join(", ")}. Quedan fuera del cálculo hasta que cargues un precio manual.`, "warn");
   }
-  if (t.coinsDay > 0 && !state.coinToFlower) {
-    add(`Este plan consume unos <strong>${fmt(t.coinsDay, 0)} coins por día</strong> en semillas y herramientas. Verificá que tus entregas o ventas a Betty los cubran.`);
+  if (!detected && t.coinsDay > 0 && !state.coinToFlower) {
+    add(`Este plan consume unos <strong>${fmt(t.coinsDay, 0)} coins por día</strong> en semillas y herramientas.`);
   }
 
   $("#advice").innerHTML = items.join("") || `<li class="warn">Cargá tu granja y los precios para ver recomendaciones.</li>`;
@@ -383,6 +455,235 @@ function renderTables() {
         .join("") +
       "</tbody>"
     : `<tbody><tr><td>Sin parches de fruta o sin precios.</td></tr></tbody>`;
+}
+
+/* ---------- Eventos, Vender, Historial ---------- */
+
+function fmtDate(iso) {
+  const [y, mo, d] = iso.split("-").map(Number);
+  return new Date(y, mo - 1, d).toLocaleDateString("es-AR", { weekday: "short", day: "numeric", month: "short" });
+}
+
+function renderEvents() {
+  const ev = insights.events;
+  $("#events").innerHTML = ev.length
+    ? ev.map((e) => `<li class="${e.today ? "today" : ""}"><time>${e.today ? "Hoy" : esc(fmtDate(e.date))}</time><div>${esc(e.title)}<small>${esc(e.note)}</small></div></li>`).join("")
+    : `<li class="empty">Sin eventos en el calendario.</li>`;
+}
+
+function renderSell() {
+  const t = result.totals;
+  const usd = (f) => (t.usdPerFlower ? ` · US$ ${fmt(f * t.usdPerFlower, 2)}` : "");
+
+  // Entregas
+  const dl = insights.deliveries;
+  const anyDouble = dl.some((d) => d.doubleToday);
+  $("#delivHint").textContent = anyDouble
+    ? "Hoy las entregas pagan el doble: los montos ya están duplicados."
+    : "Compara lo que paga cada entrega con lo que cobrarías vendiendo los ingredientes en el Marketplace.";
+  $("#delivList").innerHTML = dl.length
+    ? dl
+        .map((d) => {
+          const needs = d.needs
+            .map((n) => `<span class="need ${n.have < n.qty ? "miss" : ""}">${fmt(n.qty, 0)} ${esc(label(n.item))}${n.have < n.qty ? ` (tenés ${fmt(n.have, 0)})` : ""}</span>`)
+            .join("");
+          let reward;
+          let cls = "neutral";
+          let verdict = "";
+          if (d.kind === "flower") {
+            reward = `${fmt(d.rewardFlower, 2)} FLOWER`;
+            if (d.margin === null) verdict = `${d.unpriced} ingrediente(s) sin precio de mercado (comidas o items de crafteo): calculá su costo a mano.`;
+            else if (d.margin > 0) {
+              cls = "good";
+              verdict = `Conviene: ${fmt(d.margin, 2)} FLOWER más que vender los ingredientes${usd(d.margin)}.`;
+            } else {
+              cls = "bad";
+              verdict = `No conviene: vendiendo los ingredientes cobrás ${fmt(-d.margin, 2)} FLOWER más.`;
+            }
+          } else if (d.kind === "coins") {
+            reward = `${fmt(d.rewardCoins, 0)} coins`;
+            verdict = d.ingredientValue > 0 ? `Los ingredientes valen ${fmt(d.ingredientValue, 2)} FLOWER en el Marketplace.` : "";
+          } else if (d.kind === "items") {
+            reward = Object.entries(d.rewardItems).map(([k, v]) => `${v} ${label(k)}`).join(", ");
+          } else {
+            reward = "tickets de temporada";
+            verdict = d.ingredientValue > 0 ? `Los ingredientes valen ${fmt(d.ingredientValue, 2)} FLOWER: decidí si te interesan los tickets.` : "";
+          }
+          if (d.coinsCost) verdict += ` Además pide ${fmt(d.coinsCost, 0)} coins.`;
+          return `<li class="${cls}"><div class="card-top"><strong class="npc">${esc(d.from)}</strong><span class="card-val">${esc(reward)}</span></div>
+            <div>${needs}</div>${verdict ? `<small>${esc(verdict)}</small>` : ""}${!d.haveAll ? `<small>Te faltan ingredientes.</small>` : ""}</li>`;
+        })
+        .join("")
+    : `<li class="empty">No hay entregas abiertas, o todavía no se cargó la granja.</li>`;
+
+  // Inventario
+  const inv = insights.inventory;
+  const hasStats = !!history?.priceStats && Object.keys(history.priceStats).length > 0;
+  $("#invHint").textContent = inv.rows.length
+    ? `Valor neto de comisión: ${fmt(inv.total, 2)} FLOWER${usd(inv.total)}. Ya descuenta lo que piden las entregas que convienen.${
+        hasStats ? " La señal compara el precio de hoy con el promedio de 7 días." : " Cuando haya historial de precios vas a ver si conviene vender ahora o esperar."
+      }`
+    : "Sin inventario con precio de mercado.";
+  $("#invTbl").innerHTML = inv.rows.length
+    ? `<thead><tr><th>Recurso</th><th>Vendible</th><th>Precio</th><th>Valor</th><th>Señal</th></tr></thead><tbody>` +
+      inv.rows
+        .slice(0, 25)
+        .map((r) => {
+          let sig = "";
+          if (r.vsAvg !== null) {
+            const pct = r.vsAvg * 100;
+            sig =
+              pct >= 5
+                ? `<span class="sig up">+${fmt(pct, 0)}% · vender</span>`
+                : pct <= -5
+                  ? `<span class="sig down">${fmt(pct, 0)}% · esperar</span>`
+                  : `<span class="sig">${fmt(pct, 0)}%</span>`;
+          }
+          const days = r.daysToSell ? ` <span class="src">(${fmt(r.daysToSell, 0)} días)</span>` : "";
+          return `<tr><td>${esc(label(r.item))}</td><td>${fmt(r.sellable, 0)}${r.keep ? ` <span class="src">+${fmt(r.keep, 0)} reservado</span>` : ""}</td><td>${fmt(r.price, 4)}</td><td>${fmt(r.value, 2)}${days}</td><td>${sig}</td></tr>`;
+        })
+        .join("") +
+      `</tbody>`
+    : "";
+
+  // Bounties
+  const bt = insights.bounties;
+  $("#bountyList").innerHTML = bt.length
+    ? bt
+        .map(
+          (b) =>
+            `<li><div class="card-top"><strong>${esc({ Chicken: "Gallina", Cow: "Vaca", Sheep: "Oveja" }[b.name] || b.name)}${b.level ? ` nivel ${b.level}` : ""}</strong><span class="card-val">${fmt(b.coins, 0)} coins</span></div>
+            <small>Tenés ${b.owned} de este tipo. Revisá en el juego si alguno llegó al nivel.</small></li>`
+        )
+        .join("")
+    : `<li class="empty">No hay bounties con coins abiertas.</li>`;
+}
+
+function svgBars(data, { goal = null, h = 140 } = {}) {
+  const w = 600;
+  const pad = 22;
+  const max = Math.max(goal || 0, ...data.map((d) => d.v), 0.0001);
+  const bw = (w - pad * 2) / Math.max(1, data.length);
+  const bars = data
+    .map((d, i) => {
+      const bh = Math.max(0, (d.v / max) * (h - pad * 2));
+      return `<rect class="bar" x="${pad + i * bw + 2}" y="${h - pad - bh}" width="${Math.max(2, bw - 4)}" height="${bh}" rx="2"><title>${esc(d.label)}: ${fmt(d.v, 2)}</title></rect>`;
+    })
+    .join("");
+  const goalY = goal ? h - pad - (goal / max) * (h - pad * 2) : null;
+  const goalLine = goalY !== null ? `<line class="goal" x1="${pad}" x2="${w - pad}" y1="${goalY}" y2="${goalY}"/><text x="${w - pad}" y="${goalY - 4}" text-anchor="end">meta</text>` : "";
+  const labels = data.length ? `<text x="${pad}" y="${h - 6}">${esc(data[0].label)}</text><text x="${w - pad}" y="${h - 6}" text-anchor="end">${esc(data[data.length - 1].label)}</text>` : "";
+  return `<svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Gráfico de barras">${bars}${goalLine}${labels}</svg>`;
+}
+
+function svgLine(points, { h = 120 } = {}) {
+  if (points.length < 2) return "";
+  const w = 600;
+  const pad = 22;
+  const xs = points.map((p) => p.t);
+  const ys = points.map((p) => p.v);
+  const [x0, x1] = [Math.min(...xs), Math.max(...xs)];
+  const [y0, y1] = [Math.min(...ys), Math.max(...ys)];
+  const sx = (x) => pad + ((x - x0) / Math.max(1, x1 - x0)) * (w - pad * 2);
+  const sy = (y) => h - pad - ((y - y0) / Math.max(1e-9, y1 - y0)) * (h - pad * 2);
+  const d = points.map((p, i) => `${i ? "L" : "M"}${sx(p.t).toFixed(1)},${sy(p.v).toFixed(1)}`).join("");
+  return `<svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Precio de FLOWER">
+    <path class="line" d="${d}"/><text x="${pad}" y="14">máx US$ ${fmt(y1, 4)}</text><text x="${pad}" y="${h - 6}">mín US$ ${fmt(y0, 4)}</text></svg>`;
+}
+
+function renderHistory() {
+  const body = $("#histBody");
+  const hint = $("#histHint");
+  if (!history) {
+    hint.textContent = historyError.includes("D1")
+      ? "Todavía no está conectada la base de historial. Seguí los pasos del README para crear la base D1 y desplegar el Worker programado."
+      : `No se pudo leer el historial${historyError ? ` (${historyError})` : ""}.`;
+    body.innerHTML = "";
+    return;
+  }
+  const m = insights.metrics;
+  const t = result.totals;
+  const cron = history.cron || {};
+  hint.textContent = m
+    ? `Del ${fmtDate(m.firstDay)} al ${fmtDate(m.lastDay)}, medido con los contadores del juego. Última consulta del Worker: ${cron.lastFarmAt ? ago(cron.lastFarmAt) : "nunca"}.`
+    : "El historial necesita al menos dos días de datos. El Worker guarda una foto por día: volvé mañana.";
+
+  let html = "";
+  if (m) {
+    const usdM = (f) => (t.usdPerFlower ? `US$ ${fmt(f * 30 * t.usdPerFlower, 2)}/mes` : "–");
+    html += `<dl class="hist-kpis">
+      <div><dt>FLOWER ganado por día</dt><dd>${fmt(m.earnedPerDay, 2)}</dd></div>
+      <div><dt>Equivale a</dt><dd>${usdM(m.earnedPerDay)}</dd></div>
+      <div><dt>FLOWER gastado por día</dt><dd>${fmt(m.spentPerDay, 2)}</dd></div>
+      <div><dt>Coins netos por día</dt><dd>${fmt(m.coinsInPerDay - m.coinsOutPerDay, 0)}</dd></div>
+    </dl>`;
+    if (m.daily.length) {
+      const goalPerDay = t.neededFlowerDay;
+      html += `<h3>FLOWER ganado por día</h3>${svgBars(m.daily.map((d) => ({ label: fmtDate(d.day), v: Math.max(0, d.earned) })), { goal: goalPerDay })}
+        <p class="hint">La línea punteada es lo que necesitás por día para tu meta.</p>`;
+    }
+
+    // Ritmo real vs plan
+    const plan = {};
+    for (const s of result.streams) {
+      const g = s.category === "crop" ? "crops" : s.category === "fruit" ? "fruits" : s.name;
+      plan[g] = (plan[g] || 0) + (s.harvestsDay || 0);
+    }
+    const names = { crops: "Cultivos", fruits: "Frutas", Wood: "Árboles", Stone: "Piedra", Iron: "Hierro", Gold: "Oro", Crimstone: "Crimstone", Oil: "Petróleo", Egg: "Gallinas", Milk: "Vacas", Wool: "Ovejas" };
+    const rows = Object.keys(names)
+      .filter((g) => plan[g] > 0 || m.harvests[g] > 0)
+      .map((g) => {
+        const real = m.harvests[g];
+        const p = plan[g] || 0;
+        const eff = p > 0 && real !== null ? real / p : null;
+        return `<tr><td>${names[g]}</td><td>${real === null ? "sin dato" : fmt(real, 1)}</td><td>${fmt(p, 1)}</td><td><span class="eff ${eff === null ? "" : eff < 0.8 ? "low" : "ok"}">${eff === null ? "–" : `${fmt(eff * 100, 0)}%`}</span></td></tr>`;
+      })
+      .join("");
+    html += `<h3 class="mt">Ritmo de cosecha: real vs plan</h3>
+      <p class="hint">Cosechas por día. Por debajo de 80% estás dejando ciclos sin cosechar: los avisos de Telegram ayudan a recuperarlos.</p>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>Grupo</th><th>Real</th><th>Plan</th><th>Ritmo</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+
+    if (m.other.length) {
+      html += `<h3 class="mt">Otras actividades por día</h3>
+        <p class="hint">Pesca, miel, sal, excavación y demás. Todavía no se valúan: sirven para ver dónde va tu tiempo.</p>
+        <div class="table-wrap"><table class="tbl"><thead><tr><th>Actividad</th><th>Por día</th></tr></thead><tbody>${m.other
+          .map((o) => `<tr><td>${esc(o.key)}</td><td>${fmt(o.perDay, 1)}</td></tr>`)
+          .join("")}</tbody></table></div>`;
+    }
+  }
+
+  // Ventas cobradas
+  const sales = history.sales || [];
+  if (sales.length) {
+    const net = sales.reduce((a, s) => a + (s.flower - s.tax), 0);
+    const since30 = Date.now() - 30 * 86400e3;
+    const net30 = sales.filter((s) => s.at >= since30).reduce((a, s) => a + (s.flower - s.tax), 0);
+    html += `<h3 class="mt">Ventas cobradas en el Marketplace</h3>
+      <p class="hint">Últimos 30 días: ${fmt(net30, 2)} FLOWER netos${t.usdPerFlower ? ` (≈ US$ ${fmt(net30 * t.usdPerFlower, 2)})` : ""}. Total registrado: ${fmt(net, 2)} FLOWER.</p>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Items</th><th>Neto</th></tr></thead><tbody>${sales
+        .slice(0, 20)
+        .map(
+          (s) =>
+            `<tr><td>${new Date(s.at).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}</td><td>${esc(
+              Object.entries(s.items).map(([k, v]) => `${v} ${label(k)}`).join(", ")
+            )}</td><td>${fmt(s.flower - s.tax, 4)}</td></tr>`
+        )
+        .join("")}</tbody></table></div>`;
+  }
+
+  // FLOWER
+  const fs = (history.flowerSeries || []).map((p) => ({ t: p.t, v: p.usd }));
+  if (fs.length > 1) html += `<h3 class="mt">Precio de FLOWER (14 días)</h3>${svgLine(fs)}`;
+
+  // Próximos avisos
+  const tm = (history.timers || []).filter((x) => !x.notified).slice(0, 8);
+  if (tm.length) {
+    html += `<h3 class="mt">Próximos avisos</h3><ul class="events">${tm
+      .map((x) => `<li><time>${new Date(x.readyAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}</time><div>${esc(x.label)}</div></li>`)
+      .join("")}</ul>`;
+  }
+
+  body.innerHTML = html;
 }
 
 /* ---------- Inversión ---------- */
@@ -587,6 +888,10 @@ function renderSettings() {
       ? `Usar la comisión real de mis ventas (${fmt(detected.marketFee, 1)}%) en vez del valor de arriba`
       : "Usar la comisión real de mis ventas (todavía no hay ventas detectadas)";
   $("#useObservedTimes").checked = state.useObservedTimes !== false;
+  const cron = history?.cron;
+  $("#cronStatus").textContent = cron?.lastRunAt
+    ? `Worker activo: última corrida ${ago(cron.lastRunAt)}, última consulta de la granja ${cron.lastFarmAt ? ago(cron.lastFarmAt) : "–"}.${cron.lastFarmError ? ` Último error: ${cron.lastFarmError}.` : ""}`
+    : "Se activan al desplegar el Worker programado y conectar la base D1. Los pasos están en el README.";
   $("#rapidRoot").checked = !!result.rapidRoot;
 
   const season = detected?.season;
@@ -615,13 +920,13 @@ function renderSettings() {
 /* ---------- Eventos ---------- */
 
 function bind() {
-  $$(".tabs button").forEach((b) =>
-    b.addEventListener("click", () => {
-      $$(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-      $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${b.dataset.tab}`));
-      window.scrollTo({ top: 0 });
-    })
-  );
+  const showTab = (tab) => {
+    $$(".tabs button").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
+    $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${tab}`));
+    window.scrollTo({ top: 0 });
+  };
+  $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  $("#settingsBtn").addEventListener("click", () => showTab("ajustes"));
 
   $("#refreshBtn").addEventListener("click", () => refreshAll(true));
 
