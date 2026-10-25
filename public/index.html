@@ -24,6 +24,9 @@
     </div>
     <div class="top-actions">
       <span class="price-pill" id="flowerPill" title="Precio de FLOWER en USD"><span class="pill-k">FLOWER</span> <span id="flowerPrice">–</span></span>
+      <button class="btn-icon" id="settingsBtn" type="button" aria-label="Ajustes">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
       <button class="btn-icon" id="refreshBtn" type="button" aria-label="Actualizar datos">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -36,9 +39,11 @@
     <nav class="tabs" aria-label="Secciones">
       <button type="button" data-tab="resumen" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Meta</span></button>
       <button type="button" data-tab="ranking"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h11M4 18h6"/></svg><span>Ranking</span></button>
+      <button type="button" data-tab="vender"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h18l-2 12H5L3 7ZM8 7a4 4 0 0 1 8 0"/></svg><span>Vender</span></button>
+      <button type="button" data-tab="historial"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 7v5l3 2"/></svg><span>Historial</span></button>
       <button type="button" data-tab="inversion"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M17 7H9.5a3 3 0 0 0 0 6h5a3 3 0 0 1 0 6H6"/></svg><span>Inversión</span></button>
       <button type="button" data-tab="granja"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 21V10l9-6 9 6v11M9 21v-6h6v6"/></svg><span>Granja</span></button>
-      <button type="button" data-tab="ajustes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4"/></svg><span>Ajustes</span></button>
+      <button type="button" data-tab="ajustes" class="desk-only"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4"/></svg><span>Ajustes</span></button>
     </nav>
 
     <main>
@@ -81,6 +86,11 @@
         </div>
 
         <div class="block">
+          <h3>Próximos eventos</h3>
+          <ul class="events" id="events"></ul>
+        </div>
+
+        <div class="block">
           <h3>Plan de siembra del día</h3>
           <p class="hint" id="planHint"></p>
           <ol class="plan" id="plan"></ol>
@@ -106,6 +116,30 @@
 
         <h3 class="mt">Frutas</h3>
         <div class="table-wrap"><table class="tbl" id="fruitTbl"></table></div>
+      </section>
+
+      <!-- VENDER -->
+      <section class="view" id="view-vender" aria-labelledby="t-vender">
+        <h2 id="t-vender">Qué vender y cuándo</h2>
+
+        <h3 class="mt">Entregas abiertas</h3>
+        <p class="hint" id="delivHint">Compara lo que paga cada entrega con lo que cobrarías vendiendo los ingredientes en el Marketplace.</p>
+        <ul class="cards" id="delivList"></ul>
+
+        <h3 class="mt">Inventario para vender</h3>
+        <p class="hint" id="invHint"></p>
+        <div class="table-wrap"><table class="tbl" id="invTbl"></table></div>
+
+        <h3 class="mt">Bounties que pagan coins</h3>
+        <p class="hint">Se entrega un animal del nivel pedido a cambio de coins. Sirven para cubrir semillas y herramientas.</p>
+        <ul class="cards" id="bountyList"></ul>
+      </section>
+
+      <!-- HISTORIAL -->
+      <section class="view" id="view-historial" aria-labelledby="t-historial">
+        <h2 id="t-historial">Lo que pasó de verdad</h2>
+        <p class="hint" id="histHint"></p>
+        <div id="histBody"></div>
       </section>
 
       <!-- INVERSION -->
@@ -210,6 +244,9 @@
         <h3 class="mt">Precios y liquidez</h3>
         <p class="hint">Precio piso en FLOWER por unidad. Escribí un valor para fijarlo a mano. En liquidez, cuántas unidades por día creés que el mercado absorbe sin bajar el precio.</p>
         <div class="table-wrap"><table class="tbl prices" id="priceTbl"></table></div>
+
+        <h3 class="mt">Historial y avisos por Telegram</h3>
+        <p class="hint" id="cronStatus">Se activan al desplegar el Worker programado. Los pasos están en el README.</p>
 
         <h3 class="mt">Datos sin conexión</h3>
         <details class="disclose">

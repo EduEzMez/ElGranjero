@@ -9,3 +9,11 @@ pages_build_output_dir = "public"
 # PRICES_URL = "https://sfl.world/api/v1/prices"
 # FLOWER_TOKEN = "0x3e12b9d6a4d12cd9b4a6d613872d0eb32f68b380"
 # La API key, si hace falta, cargala como secreto:  npx wrangler pages secret put SFL_API_KEY
+
+# Base D1 compartida con el Worker programado (historial).
+# Pegá el mismo database_id que en worker/wrangler.toml.
+# Importante: con este archivo en el repo, Cloudflare toma los bindings de acá y no del panel.
+[[d1_databases]]
+binding = "DB"
+database_name = "dongranjero"
+database_id = "PEGAR_ACA_EL_ID_DE_D1"

@@ -1,0 +1,28 @@
+# Worker programado de DonGranjero: guarda historial y manda avisos por Telegram.
+# Se despliega aparte de la web:  cd worker && npx wrangler deploy
+name = "dongranjero-cron"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[triggers]
+crons = ["*/5 * * * *"] # cada 5 minutos
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dongranjero"
+database_id = "PEGAR_ACA_EL_ID_DE_D1"
+
+[vars]
+FARM_ID = "441"
+FARM_INTERVAL_MIN = "30"    # cada cuánto se consulta la granja (la API limita consultas)
+MARKET_INTERVAL_MIN = "60"  # cada cuánto se guardan precios
+TIMEZONE = "America/Argentina/Buenos_Aires"
+QUIET_FROM = "1"            # no avisar entre la 1:00 ...
+QUIET_TO = "7"              # ... y las 7:00 (vacío para desactivar)
+SITE_URL = ""               # tu web en Pages, para el link del aviso
+
+# Secretos (no van acá):
+#   npx wrangler secret put SFL_API_KEY
+#   npx wrangler secret put TELEGRAM_BOT_TOKEN
+#   npx wrangler secret put TELEGRAM_CHAT_ID
+#   npx wrangler secret put RUN_KEY          (clave para forzar una corrida desde el navegador)

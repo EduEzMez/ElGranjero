@@ -18,9 +18,13 @@ public/            sitio estático (HTML, CSS, JS sin frameworks)
   js/data.js       datos del juego editables (cultivos, tiempos, boosts)
   js/engine.js     motor de cálculo
   js/app.js        interfaz
-functions/api/     Pages Functions (proxy con caché en el edge)
-  farm/[id].js     GET /api/farm/:id
-  market.js        GET /api/market
+functions/api/     Pages Functions
+  farm/[id].js     GET /api/farm/:id   (D1 → caché → API, con respaldo ante 429)
+  market.js        GET /api/market     (precios, FLOWER/USD, dólar cripto)
+  history.js       GET /api/history    (historial resumido desde D1)
+shared/sfl.js      código compartido entre la web y el Worker
+worker/            Worker programado (cron + D1 + Telegram), se despliega aparte
+public/js/insights.js  entregas, inventario, calendario, bounties e historial
 wrangler.toml
 ```
 
@@ -39,6 +43,53 @@ Variables opcionales en Settings → Environment variables:
 | `SFL_API_BASE` / `SFL_FARM_PATH` | Cambiar el endpoint de la granja si se mueve. |
 | `PRICES_URL` | Otra fuente de precios P2P. |
 | `FLOWER_TOKEN` | Dirección del token FLOWER para el precio en USD. |
+
+## Historial y avisos por Telegram (Worker programado)
+
+Pages no puede ejecutar tareas programadas, así que hay un Worker aparte en `worker/` que corre cada 5 minutos. Guarda una foto diaria de la granja, los precios cada hora y tus ventas cobradas en una base D1. También manda por Telegram lo que está listo para cosechar. La web lee de esa misma base, así que también deja de depender del límite de consultas de la API.
+
+### 1. Crear la base D1
+
+```bash
+npx wrangler d1 create dongranjero
+```
+
+Copiá el `database_id` que devuelve y pegalo en `worker/wrangler.toml`. Después creá las tablas:
+
+```bash
+npx wrangler d1 execute dongranjero --remote --file=worker/schema.sql
+```
+
+### 2. Conectar la base a la web
+
+Pegá el mismo `database_id` en el `wrangler.toml` de la raíz (sección `[[d1_databases]]`) y hacé commit. Como el repo tiene ese archivo, Cloudflare toma los bindings de ahí y no del panel. Los secretos como `SFL_API_KEY` siguen cargados en el panel y no se tocan.
+
+### 3. Bot de Telegram
+
+1. En Telegram, hablale a **@BotFather**, mandá `/newbot` y seguí los pasos. Te da un token.
+2. Mandale cualquier mensaje a tu bot nuevo.
+3. Para saber tu chat id, hablale a **@userinfobot**: te responde con tu número de ID.
+
+### 4. Desplegar el Worker
+
+```bash
+cd worker
+npx wrangler secret put SFL_API_KEY
+npx wrangler secret put TELEGRAM_BOT_TOKEN
+npx wrangler secret put TELEGRAM_CHAT_ID
+npx wrangler secret put RUN_KEY     # cualquier clave, para pruebas manuales
+npx wrangler deploy
+```
+
+En `worker/wrangler.toml` podés cambiar el ID de granja, cada cuánto consulta, el horario sin avisos (`QUIET_FROM` / `QUIET_TO`) y el link a tu web (`SITE_URL`).
+
+### 5. Probar
+
+- `https://dongranjero-cron.TU-USUARIO.workers.dev/test?key=TU_RUN_KEY` manda un mensaje de prueba a Telegram.
+- `https://dongranjero-cron.TU-USUARIO.workers.dev/run?key=TU_RUN_KEY` fuerza una corrida completa.
+- En la web, Ajustes → "Historial y avisos por Telegram" muestra cuándo corrió por última vez.
+
+El historial necesita al menos dos días de fotos para mostrar el ingreso real y el ritmo de cosecha.
 
 ## Desarrollo local
 
