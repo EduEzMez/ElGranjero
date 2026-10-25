@@ -19,9 +19,10 @@ export async function onRequestGet({ env, request, waitUntil }) {
   const pricesUrl = env.PRICES_URL || "https://sfl.world/api/v1/prices";
   const token = (env.FLOWER_TOKEN || "0x3e12b9d6a4d12cd9b4a6d613872d0eb32f68b380").toLowerCase();
 
-  const [pricesRes, dexRes] = await Promise.allSettled([
+  const [pricesRes, dexRes, arsRes] = await Promise.allSettled([
     getJson(pricesUrl),
     getJson(`https://api.dexscreener.com/latest/dex/tokens/${token}`),
+    getJson(env.ARS_URL || "https://dolarapi.com/v1/dolares/cripto"),
   ]);
 
   const errors = [];
@@ -60,6 +61,12 @@ export async function onRequestGet({ env, request, waitUntil }) {
     errors.push({ source: "flower", message: String(dexRes.reason) });
   }
 
+  // Dólar cripto: "compra" es lo que te pagan en pesos por cada dólar (USDT) que vendés.
+  let ars = null;
+  if (arsRes.status === "fulfilled" && Number(arsRes.value?.compra) > 0) {
+    ars = { compra: Number(arsRes.value.compra), venta: Number(arsRes.value.venta) || null, nombre: arsRes.value.nombre || "Cripto", fecha: arsRes.value.fechaActualizacion || null };
+  }
+
   const out = new Response(
     JSON.stringify({
       fetchedAt: new Date().toISOString(),
@@ -67,6 +74,7 @@ export async function onRequestGet({ env, request, waitUntil }) {
       prices,
       flowerUsd,
       flowerPair,
+      ars,
       errors,
     }),
     {
