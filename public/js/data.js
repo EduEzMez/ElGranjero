@@ -62,6 +62,7 @@ export const NODES = [
 
 // Animales: producción por animal por día y alimento por animal por día (editable en la app).
 export const ANIMALS = [
+// perDay = unidades por animal en cada ciclo; el ciclo real (horas de sueño) se lee de la granja.
   { name: "Egg", label: "Huevos", animal: "gallinas", countKey: "Egg", perDay: 1, feedItem: "Corn", feedQty: 1 },
   { name: "Milk", label: "Leche", animal: "vacas", countKey: "Milk", perDay: 1, feedItem: "Wheat", feedQty: 1 },
   { name: "Wool", label: "Lana", animal: "ovejas", countKey: "Wool", perDay: 1, feedItem: "Wheat", feedQty: 1 },
@@ -122,7 +123,10 @@ export const DEFAULTS = {
   sessions: 5,
   firstHour: 8,
   lastHour: 23,
-  marketFee: 10, // % que retiene el Marketplace al vender
+  marketFee: 10, // % que retiene el Marketplace al vender (si marketFeeAuto, se usa el de tus ventas)
+  marketFeeAuto: true,
+  useObservedTimes: true, // usar los tiempos reales que guarda el juego en cada nodo
+  rapidRoot: null, // null = automático según si tus parcelas tienen Rapid Root
   cashoutFee: 5, // % estimado de swap/bridge al pasar FLOWER a USD
   coinToFlower: 0, // valor de 1 coin en FLOWER (0 = los coins se muestran aparte)
   flowerUsdOverride: null,

@@ -57,7 +57,7 @@ async function loadFarm(id) {
     detected = detectFarm(body.data);
     status.farm = "";
   } catch (err) {
-    status.farm = `No se pudo cargar la granja: ${err.message}. Podés pegar el JSON en Ajustes.`;
+    status.farm = `No se pudo cargar la granja: ${err.message.replace(/\.+$/, "")}. Podés cargar las cantidades a mano en la pestaña Granja.`;
   }
 }
 
@@ -208,6 +208,12 @@ function renderAdvice() {
     }
   }
 
+  for (const s of result.streams.filter((x) => x.category === "crop" && x.seedsDay)) {
+    const stock = Number(detected?.seedStock?.[`${s.name} Seed`]);
+    if (stock > 0 && s.seedsDay > stock) {
+      add(`El plan usa unas ${fmt(s.seedsDay, 0)} semillas de <strong>${esc(label(s.name))}</strong> por día y la tienda repone ${fmt(stock, 0)} por vez. Revisá cuántas tenés guardadas o mezclá con otro cultivo.`, "warn");
+    }
+  }
   for (const s of result.streams.filter((x) => x.overLiquidity)) {
     add(`Ojo con <strong>${esc(label(s.name))}</strong>: producirías ${fmt(s.unitsDay, 0)} por día y estimaste que el mercado absorbe ${fmt(s.overLiquidity, 0)}. Vender todo puede bajar el precio.`, "warn");
   }
@@ -262,6 +268,8 @@ function renderRanking() {
     ? list
         .map((s) => {
           const flags = [];
+          if (s.timeSource === "real") flags.push(`<span class="flag real">tiempo real</span>`);
+          if (s.timeSource === "real-general") flags.push(`<span class="flag real">tiempo real estimado</span>`);
           if (s.applied?.length) flags.push(...s.applied.map((b) => `<span class="flag boost">${esc(b)}</span>`));
           if (s.overLiquidity) flags.push(`<span class="flag">supera la liquidez estimada</span>`);
           if (s.unknownMats?.length) flags.push(`<span class="flag">sin precio: ${s.unknownMats.map(esc).join(", ")}</span>`);
@@ -409,9 +417,13 @@ function renderFarm() {
   if (detected) {
     if (detected.username) facts.push(["Jugador", detected.username]);
     if (detected.season) facts.push(["Estación", SEASON_LABEL[detected.season] || detected.season]);
-    if (detected.island) facts.push(["Isla", detected.island]);
+    if (detected.island) facts.push(["Isla", { basic: "Básica", spring: "Primavera", desert: "Desierto", volcano: "Volcán" }[detected.island] || detected.island]);
     facts.push(["Coins", fmt(detected.coins, 0)]);
     facts.push(["FLOWER en la granja", fmt(detected.flower, 2)]);
+    if (detected.vipUntil) facts.push(["VIP hasta", new Date(detected.vipUntil).toLocaleDateString("es-AR")]);
+    if (detected.marketFee != null) facts.push(["Comisión en tus ventas", `${fmt(detected.marketFee, 1)}%`]);
+    if (detected.treeUnits && detected.treeUnits !== detected.counts.Wood)
+      facts.push(["Árboles", `${detected.counts.Wood} (rinden como ${detected.treeUnits})`]);
   }
   $("#farmFacts").innerHTML = facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("");
 
@@ -461,9 +473,25 @@ function renderFarm() {
         .join("")
     : `<li class="empty">No se detectaron boosts conocidos. Si tenés alguno, cargalo abajo.</li>`;
 
-  const known = new Set(BOOSTS.map((b) => b.name));
-  const unknown = detected ? [...detected.placed, ...detected.wearables, ...detected.skills].filter((n) => !known.has(n)) : [];
-  $("#unknownItems").innerHTML = unknown.length ? [...new Set(unknown)].sort().map((n) => `<span>${esc(n)}</span>`).join("") : `<span>Nada para mostrar.</span>`;
+  const known = new Set(BOOSTS.map((b) => b.name).concat((state.customBoosts || []).map((b) => b.name)));
+  const unknown = detected ? [...detected.recentBoosts].filter((n) => !known.has(n)).sort() : [];
+  $("#unknownItems").innerHTML = unknown.length ? unknown.map((n) => `<span>${esc(n)}</span>`).join("") : `<span>Nada para mostrar.</span>`;
+
+  const rows2 = result.streams
+    .concat(result.singleCrop.filter((c) => !result.streams.some((s) => s.name === c.name)).map((c) => ({ ...c, category: "crop" })))
+    .filter((s) => s.cycleMin);
+  const base = Object.fromEntries([...CROPS, ...FRUITS, ...NODES].map((x) => [x.name, x.hours * 60]));
+  const srcLabel = { real: "medido en tu granja", "real-general": "estimado con tus boosts generales", tabla: "tabla de boosts" };
+  $("#timesTbl").innerHTML = rows2.length
+    ? `<thead><tr><th>Recurso</th><th>Base</th><th>Tu ciclo</th><th>Fuente</th></tr></thead><tbody>` +
+      rows2
+        .map(
+          (s) =>
+            `<tr><td>${esc(label(s.name))}</td><td>${base[s.name] ? dur(base[s.name]) : "–"}</td><td>${dur(s.cycleMin)}</td><td class="src">${esc(srcLabel[s.timeSource] || "")}</td></tr>`
+        )
+        .join("") +
+      `</tbody>`
+    : `<tbody><tr><td>Cargá la granja para ver los tiempos.</td></tr></tbody>`;
 }
 
 /* ---------- Ajustes ---------- */
@@ -483,6 +511,13 @@ function renderSettings() {
   setVal("#cashoutFee", state.cashoutFee);
   setVal("#flowerUsdOverride", state.flowerUsdOverride ?? "");
   setVal("#coinToFlower", state.coinToFlower);
+  $("#marketFeeAuto").checked = state.marketFeeAuto !== false;
+  $("#marketFeeAutoLabel").textContent =
+    detected?.marketFee != null
+      ? `Usar la comisión real de mis ventas (${fmt(detected.marketFee, 1)}%) en vez del valor de arriba`
+      : "Usar la comisión real de mis ventas (todavía no hay ventas detectadas)";
+  $("#useObservedTimes").checked = state.useObservedTimes !== false;
+  $("#rapidRoot").checked = !!result.rapidRoot;
 
   const season = detected?.season;
   $("#seasonHint").textContent = season
@@ -630,6 +665,14 @@ function bind() {
   numBind("#cashoutFee", "cashoutFee", { max: 100 });
   numBind("#flowerUsdOverride", "flowerUsdOverride", { allowEmpty: true });
   numBind("#coinToFlower", "coinToFlower");
+
+  for (const id of ["marketFeeAuto", "useObservedTimes", "rapidRoot"]) {
+    $(`#${id}`).addEventListener("change", (e) => {
+      state[id] = e.target.checked;
+      saveState();
+      recompute();
+    });
+  }
 
   $("#cropToggles").addEventListener("click", (e) => {
     const c = e.target.closest("[data-crop]")?.dataset.crop;
