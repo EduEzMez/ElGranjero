@@ -36,9 +36,12 @@ async function run(env, { force = false } = {}) {
   const meta = await readMeta(db);
   const log = { at: new Date().toISOString() };
 
-  // 1. Granja
+  // 1. Granja (respeta la espera después de un 429, incluso con /run)
   const farmEvery = (Number(env.FARM_INTERVAL_MIN) || 30) * 60e3;
-  if (force || !meta.lastFarmAt || now - Date.parse(meta.lastFarmAt) >= farmEvery) {
+  const blockedUntil = Number(meta.farmBlockedUntil) || 0;
+  if (now < blockedUntil) {
+    log.farmSkipped = `Esperando por límite de la API hasta ${new Date(blockedUntil).toISOString()}`;
+  } else if (force || !meta.lastFarmAt || now - Date.parse(meta.lastFarmAt) >= farmEvery) {
     try {
       const data = await fetchFarmUpstream(env, id);
       const farm = farmOf(data);
@@ -48,11 +51,22 @@ async function run(env, { force = false } = {}) {
       const timers = computeTimers(farm);
       await saveTimers(db, id, timers);
       log.timers = timers.length;
-      await writeMeta(db, { lastFarmAt: new Date().toISOString(), lastFarmError: "" });
+      await writeMeta(db, { lastFarmAt: new Date().toISOString(), lastFarmError: "", farmStrikes: "0", farmBlockedUntil: "0" });
     } catch (err) {
       log.farmError = err.message;
-      // Con 429 no se insiste: se reintenta en la próxima ventana.
-      await writeMeta(db, { lastFarmAt: new Date().toISOString(), lastFarmError: err.message });
+      const patch = { lastFarmAt: new Date().toISOString(), lastFarmError: err.message };
+      if (err.status === 429) {
+        // Espera progresiva: 60, 120, 240 min... (máx. 12 h), o lo que pida la API en Retry-After.
+        const strikes = (Number(meta.farmStrikes) || 0) + 1;
+        const backoffMin = Math.min(720, (Number(env.FARM_BACKOFF_MIN) || 60) * 2 ** (strikes - 1));
+        const retryAfterMs = Number(err.retryAfter) > 0 ? Number(err.retryAfter) * 1000 : 0;
+        const wait = Math.max(backoffMin * 60e3, retryAfterMs);
+        patch.farmStrikes = String(strikes);
+        patch.farmBlockedUntil = String(now + wait);
+        patch.lastFarmError = `${err.message}. Próximo intento: ${new Date(now + wait).toISOString()}`;
+        log.nextTry = new Date(now + wait).toISOString();
+      }
+      await writeMeta(db, patch);
     }
   }
 
