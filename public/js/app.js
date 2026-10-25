@@ -123,6 +123,7 @@ function recompute(animate = false) {
   renderHeader();
   renderStatus();
   renderGoal(animate);
+  renderFlower();
   renderAdvice();
   renderPlan();
   renderRanking();
@@ -187,6 +188,46 @@ function renderGoal(animate) {
   $("#kFlowerDay").textContent = fmt(t.netFlowerDay, 2);
   $("#kNeeded").textContent = t.neededFlowerDay === null ? "–" : fmt(t.neededFlowerDay, 2);
   $("#kCoins").textContent = fmt(t.coinsDay, 0);
+}
+
+function compact(n) {
+  if (!Number.isFinite(n)) return "–";
+  if (n >= 1e6) return `${fmt(n / 1e6, 1)} M`;
+  if (n >= 1e3) return `${fmt(n / 1e3, 1)} mil`;
+  return fmt(n, 0);
+}
+
+function renderFlower() {
+  const t = result.totals;
+  const pair = market?.flowerPair;
+  const arsRate = market?.ars?.compra;
+  const manual = Number(state.flowerUsdOverride) > 0;
+
+  $("#fUsd").textContent = t.flowerUsd ? `US$ ${fmt(t.flowerUsd, 4)}` : "Sin precio";
+  $("#fArs").textContent = t.flowerUsd && arsRate ? `≈ $ ${fmt(t.flowerUsd * arsRate, 2)} ARS` : "";
+
+  const ch = Number(pair?.change24h);
+  const chEl = $("#fChange");
+  chEl.textContent = !manual && Number.isFinite(ch) ? `${ch > 0 ? "+" : ""}${fmt(ch, 2)}% en 24 h` : manual ? "precio manual" : "";
+  chEl.className = `chg ${!manual && ch > 0 ? "up" : !manual && ch < 0 ? "down" : ""}`;
+
+  const stats = [];
+  if (!manual && pair?.volume24hUsd != null) stats.push(["Volumen 24 h", `US$ ${compact(pair.volume24hUsd)}`]);
+  if (!manual && pair?.liquidityUsd != null) stats.push(["Liquidez", `US$ ${compact(pair.liquidityUsd)}`]);
+  if (detected?.flower != null && t.flowerUsd) {
+    stats.push(["Tu saldo", `${fmt(detected.flower, 2)} FLOWER`]);
+    stats.push(["Tu saldo vale", `US$ ${fmt(detected.flower * t.flowerUsd, 2)}`]);
+    if (arsRate) stats.push(["En pesos", `$ ${fmt(detected.flower * t.flowerUsd * arsRate, 0)}`]);
+  }
+  if (arsRate) stats.push(["Tu meta en pesos", `$ ${fmt(state.targetUsd * arsRate, 0)}/mes`]);
+  if (arsRate && t.usdMonth != null) stats.push(["Proyección en pesos", `$ ${fmt(t.usdMonth * arsRate, 0)}/mes`]);
+  $("#fStats").innerHTML = stats.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("");
+
+  const notes = [];
+  if (arsRate) notes.push(`Pesos calculados con el dólar ${market.ars.nombre.toLowerCase()} (compra: $ ${fmt(arsRate, 2)}).`);
+  if (!manual && pair?.dex) notes.push(`Precio del par con más liquidez en ${pair.dex}.`);
+  if (market?.fetchedAt) notes.push(`Actualizado ${ago(market.fetchedAt)}.`);
+  $("#fNote").textContent = notes.join(" ");
 }
 
 function renderAdvice() {
