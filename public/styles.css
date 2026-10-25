@@ -278,3 +278,19 @@ input[type="range"] { padding: 0; accent-color: var(--leaf); border: 0; backgrou
 .check { display: flex; gap: .6rem; align-items: flex-start; margin: .5rem 0; font-size: .92rem; cursor: pointer; }
 .check input { width: 20px; height: 20px; min-height: 0; margin-top: .1rem; accent-color: var(--leaf); flex: none; }
 .flag.real { background: var(--leaf-soft); color: var(--leaf); }
+
+/* Tarjeta de FLOWER */
+.flower { margin-top: 1rem; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: .9rem 1rem; }
+.flower-head { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; }
+.flower-head h3 { margin: 0; font-size: 1rem; }
+.chg { font-weight: 700; font-size: .9rem; }
+.chg.up { color: var(--leaf); }
+.chg.down { color: var(--berry); }
+.flower-price { margin: .3rem 0 .6rem; display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .7rem; }
+.flower-price strong { font: 800 1.9rem/1.1 var(--display); }
+.flower-price span { color: var(--muted); }
+.flower-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: .4rem .75rem; margin: 0 0 .5rem; }
+@media (min-width: 600px) { .flower-stats { grid-template-columns: repeat(4, 1fr); } }
+.flower-stats dt { font-size: .74rem; color: var(--muted); }
+.flower-stats dd { margin: 0; font-weight: 700; }
+.flower .hint { margin: 0; }
