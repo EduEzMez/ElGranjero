@@ -136,15 +136,20 @@
         <p class="hint">Detectadas desde la API. Si algo no coincide con lo que ves en el juego, corregilo acá.</p>
         <div class="grid3" id="countsGrid"></div>
 
+        <h3 class="mt">Tiempos reales de tu granja</h3>
+        <p class="hint">El juego guarda en cada parcela y nodo cuánto tiempo te descuentan tus boosts. Estos son los ciclos que usa el cálculo.</p>
+        <div class="table-wrap"><table class="tbl" id="timesTbl"></table></div>
+
         <h3 class="mt">Animales</h3>
+        <p class="hint">Unidades y alimento por animal en cada ciclo. El ciclo se toma de cuánto duermen tus animales.</p>
         <div id="animalCfg" class="grid2"></div>
 
         <h3 class="mt">Boosts activos</h3>
         <ul class="boosts" id="boostList"></ul>
 
         <details class="disclose">
-          <summary>Items de tu granja sin boost cargado</summary>
-          <p class="hint">Si alguno da un boost a la producción, cargalo como boost manual.</p>
+          <summary>Boosts que el juego aplicó esta semana y no están cargados</summary>
+          <p class="hint">Sus efectos sobre los tiempos ya están incluidos en los tiempos reales. Si alguno suma rendimiento (más unidades por cosecha), cargalo como boost manual.</p>
           <div class="tags" id="unknownItems"></div>
         </details>
 
@@ -183,6 +188,9 @@
           <label class="field"><span>Valor de 1 coin en FLOWER</span><input id="coinToFlower" type="number" step="any" min="0"></label>
         </div>
         <p class="hint">Con el valor del coin en 0, las semillas y herramientas se muestran como coins por día y no se descuentan del FLOWER.</p>
+        <label class="check"><input type="checkbox" id="marketFeeAuto"> <span id="marketFeeAutoLabel">Usar la comisión real de mis ventas</span></label>
+        <label class="check"><input type="checkbox" id="useObservedTimes"> <span>Usar los tiempos reales que guarda el juego</span></label>
+        <label class="check"><input type="checkbox" id="rapidRoot"> <span>Uso Rapid Root en los cultivos (−50% de tiempo; su costo no se descuenta)</span></label>
 
         <h3 class="mt">Cultivos habilitados</h3>
         <p class="hint" id="seasonHint"></p>
