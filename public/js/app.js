@@ -1,5 +1,6 @@
 import { CROPS, FRUITS, NODES, ANIMALS, BOOSTS, DEFAULTS, LABELS, CATEGORY_LABEL, SEASON_CROPS, SEASON_LABEL } from "./data.js";
 import { compute, detectFarm, fmt } from "./engine.js";
+import { icon } from "./icons.js";
 import { analyzeDeliveries, analyzeInventory, reservedByDeliveries, upcomingEvents, coinBounties, historyMetrics } from "./insights.js";
 
 const LS_STATE = "dongranjero:state:v1";
@@ -10,6 +11,21 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const label = (n) => LABELS[n] || n;
+const CAT_OF = Object.fromEntries([
+  ...CROPS.map((c) => [c.name, "crop"]),
+  ...FRUITS.map((f) => [f.name, "fruit"]),
+  ...NODES.map((n) => [n.name, "node"]),
+  ...ANIMALS.map((x) => [x.name, "animal"]),
+]);
+const ic = (name, size = 24, category = CAT_OF[name]) => icon(name, { size, category });
+const withIcon = (name, size = 20) => `<span class="res">${ic(name, size)}${esc(label(name))}</span>`;
+
+function paintStaticIcons() {
+  $$("[data-icon]").forEach((el) => {
+    el.innerHTML = icon(el.dataset.icon, { size: Number(el.dataset.size) || 24 });
+    el.style.display = "inline-flex";
+  });
+}
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
 let state = loadState();
@@ -210,8 +226,8 @@ function renderGoal(animate) {
   const filled = Math.min(cells, ratio * cells);
   const meter = $("#plotMeter");
   meter.innerHTML = Array.from({ length: cells }, (_, i) => {
-    if (i + 1 <= filled) return `<span class="plot fill" style="--i:${i}"></span>`;
-    if (i < filled) return `<span class="plot part" style="--p:${Math.round((filled - i) * 100)}%"></span>`;
+    if (i + 1 <= filled) return `<span class="plot fill" style="--i:${i}">${icon("Sunflower", { size: 40 })}</span>`;
+    if (i < filled) return `<span class="plot part">${icon("sprout", { size: 40 })}</span>`;
     return `<span class="plot"></span>`;
   }).join("");
   meter.setAttribute("aria-label", `Avance: ${Math.round(ratio * 100)}% de la meta`);
@@ -274,7 +290,8 @@ function renderFlower() {
 function renderAdvice() {
   const t = result.totals;
   const items = [];
-  const add = (html, kind = "") => items.push(`<li class="${kind}">${html}</li>`);
+  const add = (html, kind = "", ico = kind === "bad" ? "Crimstone" : kind === "warn" ? "bell" : "sprout") =>
+    items.push(`<li class="${kind}"><span class="ico">${CAT_OF[ico] ? ic(ico, 26) : icon(ico, { size: 26 })}</span><div>${html}</div></li>`);
   const usd = (flowerDay) => (t.usdPerFlower ? `≈ US$ ${fmt(flowerDay * 30 * t.usdPerFlower, 2)}/mes` : "");
 
   if (!detected) add("Todavía no hay datos de la granja. Tocá <strong>actualizar</strong> arriba o cargá el número en la pestaña Granja.", "warn");
@@ -285,14 +302,14 @@ function renderAdvice() {
   if (good.length) {
     const top = good[0];
     const share = t.netFlowerDay > 0 ? Math.round((top.netFlowerDay / t.netFlowerDay) * 100) : 0;
-    add(`Tu recurso más rentable es <strong>${esc(label(top.name))}</strong>: ${fmt(top.netFlowerDay, 2)} FLOWER por día ${usd(top.netFlowerDay)}, el ${share}% de lo que genera la granja.`);
+    add(`Tu recurso más rentable es <strong>${esc(label(top.name))}</strong>: ${fmt(top.netFlowerDay, 2)} FLOWER por día ${usd(top.netFlowerDay)}, el ${share}% de lo que genera la granja.`, "", top.name);
   }
 
   const cropsUsed = [...new Set(result.plan.map((p) => p.crop))];
   if (cropsUsed.length > 1) {
-    add(`En las parcelas conviene rotar: <strong>${cropsUsed.map((c) => esc(label(c))).join(", ")}</strong> según el tiempo hasta tu próxima sesión. El plan del día está abajo.`);
+    add(`En las parcelas conviene rotar: <strong>${cropsUsed.map((c) => esc(label(c))).join(", ")}</strong> según el tiempo hasta tu próxima sesión. El plan del día está abajo.`, "", cropsUsed[0]);
   } else if (cropsUsed.length === 1) {
-    add(`En las ${result.plots} parcelas conviene plantar solo <strong>${esc(label(cropsUsed[0]))}</strong>.`);
+    add(`En las ${result.plots} parcelas conviene plantar solo <strong>${esc(label(cropsUsed[0]))}</strong>.`, "", cropsUsed[0]);
   }
 
   if (t.neededFlowerDay !== null && good.length) {
@@ -304,7 +321,7 @@ function renderAdvice() {
         set.push(s);
         if (acc >= t.neededFlowerDay) break;
       }
-      add(`Para tu meta alcanza con vender <strong>${set.map((s) => esc(label(s.name))).join(" + ")}</strong>. Lo demás lo podés guardar, usar en recetas o vender si sube el precio.`);
+      add(`Para tu meta alcanza con vender <strong>${set.map((s) => esc(label(s.name))).join(" + ")}</strong>. Lo demás lo podés guardar, usar en recetas o vender si sube el precio.`, "", "trophy");
     } else {
       const gap = t.neededFlowerDay - t.netFlowerDay;
       add(`Te faltan <strong>${fmt(gap, 2)} FLOWER por día</strong> para llegar a US$ ${fmt(state.targetUsd, 0)}.`, "warn");
@@ -326,18 +343,19 @@ function renderAdvice() {
       `En los últimos ${fmt(m.span, 0)} días ganaste <strong>${fmt(m.earnedPerDay, 2)} FLOWER por día</strong> (≈ US$ ${fmt(realUsd, 2)}/mes) según los contadores del juego.${
         t.usdMonth ? ` El plan proyecta US$ ${fmt(t.usdMonth, 2)}/mes: ${realUsd >= t.usdMonth * 0.9 ? "vas en línea" : "hay margen para mejorar el ritmo"}.` : ""
       }`,
-      realUsd >= state.targetUsd ? "" : "warn"
+      realUsd >= state.targetUsd ? "" : "warn",
+      "hourglass"
     );
   }
   const todayDouble = insights.events.find((e) => e.today && e.name === "doubleDelivery");
   const nextDouble = insights.events.find((e) => !e.today && e.name === "doubleDelivery");
-  if (todayDouble) add("<strong>Hoy hay entregas dobles.</strong> Priorizá las entregas que pagan FLOWER antes de vender al Marketplace.");
-  else if (nextDouble) add(`Próximas entregas dobles: <strong>${esc(fmtDate(nextDouble.date))}</strong>. Conviene guardar ingredientes para ese día.`);
+  if (todayDouble) add("<strong>Hoy hay entregas dobles.</strong> Priorizá las entregas que pagan FLOWER antes de vender al Marketplace.", "", "calendar");
+  else if (nextDouble) add(`Próximas entregas dobles: <strong>${esc(fmtDate(nextDouble.date))}</strong>. Conviene guardar ingredientes para ese día.`, "", "calendar");
   const bestDeliv = insights.deliveries.find((d) => d.kind === "flower" && d.margin > 0);
-  if (bestDeliv) add(`La entrega de <strong>${esc(bestDeliv.from)}</strong> paga ${fmt(bestDeliv.rewardFlower, 2)} FLOWER, ${fmt(bestDeliv.margin, 2)} más que vender sus ingredientes. Detalle en Vender.`);
+  if (bestDeliv) add(`La entrega de <strong>${esc(bestDeliv.from)}</strong> paga ${fmt(bestDeliv.rewardFlower, 2)} FLOWER, ${fmt(bestDeliv.margin, 2)} más que vender sus ingredientes. Detalle en Vender.`, "", "sack");
   if (insights.inventory.total > 0) {
     const top = insights.inventory.rows.slice(0, 3).map((r) => esc(label(r.item))).join(", ");
-    add(`Tu inventario vendible vale unos <strong>${fmt(insights.inventory.total, 2)} FLOWER</strong>${t.usdPerFlower ? ` (≈ US$ ${fmt(insights.inventory.total * t.usdPerFlower, 2)})` : ""}. Lo de más valor: ${top}.`);
+    add(`Tu inventario vendible vale unos <strong>${fmt(insights.inventory.total, 2)} FLOWER</strong>${t.usdPerFlower ? ` (≈ US$ ${fmt(insights.inventory.total * t.usdPerFlower, 2)})` : ""}. Lo de más valor: ${top}.`, "", insights.inventory.rows[0]?.item || "sack");
   }
   if (detected && t.coinsDay > 0) {
     const days = detected.coins / t.coinsDay;
@@ -346,7 +364,8 @@ function renderAdvice() {
       `Tus ${fmt(detected.coins, 0)} coins alcanzan para unos <strong>${fmt(days, 1)} días</strong> del plan.${
         netCoins !== null ? ` En la última semana tu saldo de coins ${netCoins >= 0 ? "subió" : "bajó"} ${fmt(Math.abs(netCoins), 0)} por día.` : ""
       }`,
-      days < 3 ? "warn" : ""
+      days < 3 ? "warn" : "",
+      "coin"
     );
   }
 
@@ -396,7 +415,7 @@ function renderPlan() {
   $("#plan").innerHTML = plan
     .map((p) => {
       const ready = day(p.readyMinute) === day(p.minute) ? hhmm(p.readyMinute) : `día ${day(p.readyMinute)}, ${hhmm(p.readyMinute)}`;
-      return `<li><time>Día ${day(p.minute)} · ${hhmm(p.minute)}</time> Plantá <strong>${esc(label(p.crop))}</strong> en las parcelas libres <span class="muted">· listo ${ready}</span></li>`;
+      return `<li>${ic(p.crop, 28)}<div><time>Día ${day(p.minute)} · ${hhmm(p.minute)}</time> Plantá <strong>${esc(label(p.crop))}</strong> en las parcelas libres <span class="muted">· listo ${ready}</span></div></li>`;
     })
     .join("");
   $("#plan").insertAdjacentHTML("beforeend", `<li class="muted">En las demás sesiones solo cosechás lo que esté listo. El ciclo se repite.</li>`);
@@ -419,6 +438,7 @@ function renderRanking() {
           if (s.bestOf > 1) flags.push(`<span class="flag">mejor de ${s.bestOf} frutas</span>`);
           const usdM = t.usdPerFlower ? `US$ ${fmt(s.netFlowerDay * 30 * t.usdPerFlower, 2)}/mes` : "";
           return `<li>
+            <span class="ico">${ic(s.name, 30)}</span>
             <div><div class="name">${esc(label(s.name))}</div><div class="cat">${CATEGORY_LABEL[s.category]} · ${s.nodes} ${unitWord(s.category)}</div></div>
             <div><div class="val ${s.netFlowerDay <= 0 ? "neg" : ""}">${fmt(s.netFlowerDay, 2)} <small>FLOWER/día</small></div><div class="usd">${usdM}</div></div>
             <div class="bar"><i style="width:${Math.max(0, (s.netFlowerDay / max) * 100)}%"></i></div>
@@ -442,7 +462,7 @@ function renderTables() {
       result.singleCrop
         .map(
           (c, i) =>
-            `<tr class="${i === 0 ? "top" : ""}"><td>${esc(label(c.name))}</td><td>${dur(c.cycleMin)}</td><td>${fmt(c.harvestsPerPlot, 2)}</td><td>${fmt(c.unitsDay, 1)}</td><td>${fmt(c.netFlowerDay, 2)}</td></tr>`
+            `<tr class="${i === 0 ? "top" : ""}"><td>${withIcon(c.name)}</td><td>${dur(c.cycleMin)}</td><td>${fmt(c.harvestsPerPlot, 2)}</td><td>${fmt(c.unitsDay, 1)}</td><td>${fmt(c.netFlowerDay, 2)}</td></tr>`
         )
         .join("") +
       "</tbody>"
@@ -451,7 +471,7 @@ function renderTables() {
   $("#fruitTbl").innerHTML = result.fruitRank.length
     ? `<thead><tr><th>Fruta</th><th>Ciclo</th><th>Unid./día</th><th>FLOWER/día</th></tr></thead><tbody>` +
       result.fruitRank
-        .map((f, i) => `<tr class="${i === 0 ? "top" : ""}"><td>${esc(label(f.name))}</td><td>${dur(f.cycleMin)}</td><td>${fmt(f.unitsDay, 1)}</td><td>${fmt(f.netFlowerDay, 2)}</td></tr>`)
+        .map((f, i) => `<tr class="${i === 0 ? "top" : ""}"><td>${withIcon(f.name)}</td><td>${dur(f.cycleMin)}</td><td>${fmt(f.unitsDay, 1)}</td><td>${fmt(f.netFlowerDay, 2)}</td></tr>`)
         .join("") +
       "</tbody>"
     : `<tbody><tr><td>Sin parches de fruta o sin precios.</td></tr></tbody>`;
@@ -467,7 +487,12 @@ function fmtDate(iso) {
 function renderEvents() {
   const ev = insights.events;
   $("#events").innerHTML = ev.length
-    ? ev.map((e) => `<li class="${e.today ? "today" : ""}"><time>${e.today ? "Hoy" : esc(fmtDate(e.date))}</time><div>${esc(e.title)}<small>${esc(e.note)}</small></div></li>`).join("")
+    ? ev
+        .map((e) => {
+          const evIcon = e.name === "doubleDelivery" ? "sack" : e.name === "bountifulHarvest" ? "Wheat" : e.name === "fullMoon" ? "flowerToken" : "bell";
+          return `<li class="${e.today ? "today" : ""}">${icon(evIcon, { size: 22 })}<time>${e.today ? "Hoy" : esc(fmtDate(e.date))}</time><div>${esc(e.title)}<small>${esc(e.note)}</small></div></li>`;
+        })
+        .join("")
     : `<li class="empty">Sin eventos en el calendario.</li>`;
 }
 
@@ -485,7 +510,7 @@ function renderSell() {
     ? dl
         .map((d) => {
           const needs = d.needs
-            .map((n) => `<span class="need ${n.have < n.qty ? "miss" : ""}">${fmt(n.qty, 0)} ${esc(label(n.item))}${n.have < n.qty ? ` (tenés ${fmt(n.have, 0)})` : ""}</span>`)
+            .map((n) => `<span class="need ${n.have < n.qty ? "miss" : ""}">${ic(n.item, 16)}${fmt(n.qty, 0)} ${esc(label(n.item))}${n.have < n.qty ? ` (tenés ${fmt(n.have, 0)})` : ""}</span>`)
             .join("");
           let reward;
           let cls = "neutral";
@@ -510,7 +535,8 @@ function renderSell() {
             verdict = d.ingredientValue > 0 ? `Los ingredientes valen ${fmt(d.ingredientValue, 2)} FLOWER: decidí si te interesan los tickets.` : "";
           }
           if (d.coinsCost) verdict += ` Además pide ${fmt(d.coinsCost, 0)} coins.`;
-          return `<li class="${cls}"><div class="card-top"><strong class="npc">${esc(d.from)}</strong><span class="card-val">${esc(reward)}</span></div>
+          const rIcon = d.kind === "flower" ? icon("flowerToken", { size: 20 }) : d.kind === "coins" ? icon("coin", { size: 20 }) : icon("sack", { size: 20 });
+          return `<li class="${cls}"><div class="card-top"><strong class="npc">${esc(d.from)}</strong><span class="card-val">${rIcon}${esc(reward)}</span></div>
             <div>${needs}</div>${verdict ? `<small>${esc(verdict)}</small>` : ""}${!d.haveAll ? `<small>Te faltan ingredientes.</small>` : ""}</li>`;
         })
         .join("")
@@ -540,7 +566,7 @@ function renderSell() {
                   : `<span class="sig">${fmt(pct, 0)}%</span>`;
           }
           const days = r.daysToSell ? ` <span class="src">(${fmt(r.daysToSell, 0)} días)</span>` : "";
-          return `<tr><td>${esc(label(r.item))}</td><td>${fmt(r.sellable, 0)}${r.keep ? ` <span class="src">+${fmt(r.keep, 0)} reservado</span>` : ""}</td><td>${fmt(r.price, 4)}</td><td>${fmt(r.value, 2)}${days}</td><td>${sig}</td></tr>`;
+          return `<tr><td>${withIcon(r.item)}</td><td>${fmt(r.sellable, 0)}${r.keep ? ` <span class="src">+${fmt(r.keep, 0)} reservado</span>` : ""}</td><td>${fmt(r.price, 4)}</td><td>${fmt(r.value, 2)}${days}</td><td>${sig}</td></tr>`;
         })
         .join("") +
       `</tbody>`
@@ -552,7 +578,7 @@ function renderSell() {
     ? bt
         .map(
           (b) =>
-            `<li><div class="card-top"><strong>${esc({ Chicken: "Gallina", Cow: "Vaca", Sheep: "Oveja" }[b.name] || b.name)}${b.level ? ` nivel ${b.level}` : ""}</strong><span class="card-val">${fmt(b.coins, 0)} coins</span></div>
+            `<li><div class="card-top"><strong>${ic({ Chicken: "Egg", Cow: "Milk", Sheep: "Wool" }[b.name] || "sprout", 22)}${esc({ Chicken: "Gallina", Cow: "Vaca", Sheep: "Oveja" }[b.name] || b.name)}${b.level ? ` nivel ${b.level}` : ""}</strong><span class="card-val">${icon("coin", { size: 20 })}${fmt(b.coins, 0)} coins</span></div>
             <small>Tenés ${b.owned} de este tipo. Revisá en el juego si alguno llegó al nivel.</small></li>`
         )
         .join("")
@@ -679,7 +705,7 @@ function renderHistory() {
   const tm = (history.timers || []).filter((x) => !x.notified).slice(0, 8);
   if (tm.length) {
     html += `<h3 class="mt">Próximos avisos</h3><ul class="events">${tm
-      .map((x) => `<li><time>${new Date(x.readyAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}</time><div>${esc(x.label)}</div></li>`)
+      .map((x) => `<li>${icon("bell", { size: 22 })}<time>${new Date(x.readyAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}</time><div>${esc(x.label)}</div></li>`)
       .join("")}</ul>`;
   }
 
@@ -858,7 +884,7 @@ function renderFarm() {
       rows2
         .map(
           (s) =>
-            `<tr><td>${esc(label(s.name))}</td><td>${base[s.name] ? dur(base[s.name]) : "–"}</td><td>${dur(s.cycleMin)}</td><td class="src">${esc(srcLabel[s.timeSource] || "")}</td></tr>`
+            `<tr><td>${withIcon(s.name)}</td><td>${base[s.name] ? dur(base[s.name]) : "–"}</td><td>${dur(s.cycleMin)}</td><td class="src">${esc(srcLabel[s.timeSource] || "")}</td></tr>`
         )
         .join("") +
       `</tbody>`
@@ -909,7 +935,7 @@ function renderSettings() {
       `<thead><tr><th>Recurso</th><th>Mercado</th><th>Manual</th><th>Liquidez/día</th></tr></thead><tbody>` +
       ALL_PRICED.map((n) => {
         const m = market?.prices?.[n];
-        return `<tr><td>${esc(label(n))}</td><td>${Number.isFinite(m) ? fmt(m, 4) : `<span class="src">sin dato</span>`}</td>
+        return `<tr><td>${withIcon(n)}</td><td>${Number.isFinite(m) ? fmt(m, 4) : `<span class="src">sin dato</span>`}</td>
           <td><input type="number" step="any" min="0" data-price="${n}" value="${state.priceOverrides?.[n] ?? ""}" aria-label="Precio manual de ${esc(label(n))}"></td>
           <td><input type="number" step="1" min="0" data-liq="${n}" value="${state.liquidity?.[n] ?? ""}" aria-label="Liquidez diaria de ${esc(label(n))}"></td></tr>`;
       }).join("") +
@@ -1125,6 +1151,7 @@ function bind() {
 
 /* ---------- Inicio ---------- */
 
+paintStaticIcons();
 bind();
 recompute(true);
 refreshAll();
