@@ -199,3 +199,123 @@ export function historyMetrics(history, { windowDays = 7 } = {}) {
     other,
   };
 }
+
+/* ---------- Calendario mensual ---------- */
+
+const pad = (n) => String(n).padStart(2, "0");
+const isoDay = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
+
+// Reparte la meta del mes día por día.
+// - Días pasados: lo ganado (contador "SFL Earned") contra una vara fija = meta ÷ días con datos.
+// - Hoy y días futuros: lo que falta se reparte según el peso de cada día (libre 0, normal 1, fuerte 1,5).
+// - Los días anteriores al primer registro no cuentan: la meta se prorratea desde ahí.
+export function monthCalendar({ history, today, goalUsd, usdPerFlowerNow, cashout, weights = {}, events = [], capacityUsdDay = null }) {
+  const [y, m] = today.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const todayN = Number(today.slice(8, 10));
+  const snaps = history?.days || [];
+  const priceOf = (d) => {
+    const p = history?.flowerDaily?.[d];
+    return p ? p * (1 - cashout) : usdPerFlowerNow;
+  };
+
+  // Ganado por día a partir de fotos consecutivas.
+  const earned = {};
+  for (let i = 1; i < snaps.length; i++) {
+    const a = snaps[i - 1];
+    const b = snaps[i];
+    const delta = num(b.activity?.["SFL Earned"]) - num(a.activity?.["SFL Earned"]);
+    const gap = Math.round((Date.parse(b.day) - Date.parse(a.day)) / 86400e3);
+    earned[b.day] = { flower: Math.max(0, delta), merged: gap > 1 };
+  }
+
+  const doubleDays = new Set(events.filter((e) => e.name === "doubleDelivery").map((e) => e.date));
+  const weightOf = (d) => (d in weights ? weights[d] : doubleDays.has(d) ? 1.5 : 1);
+
+  // Primer día del mes con datos (si no hay, hoy).
+  let startN = todayN;
+  for (let n = 1; n <= todayN; n++) {
+    if (earned[isoDay(y, m, n)]) {
+      startN = n;
+      break;
+    }
+  }
+  const trackedDays = daysInMonth - startN + 1;
+  const goal = goalUsd * (trackedDays / daysInMonth);
+  const baseline = goal / trackedDays;
+
+  let earnedPast = 0;
+  const days = [];
+  for (let n = 1; n <= daysInMonth; n++) {
+    const d = isoDay(y, m, n);
+    const e = earned[d];
+    const usd = e && usdPerFlowerNow ? e.flower * priceOf(d) : null;
+    const day = { date: d, n, weekday: new Date(y, m - 1, n).getDay(), weight: weightOf(d), events: events.filter((ev) => ev.date === d), merged: !!e?.merged };
+    if (n < startN) day.status = "nodata";
+    else if (n < todayN) {
+      day.earnedFlower = e ? e.flower : 0;
+      day.earnedUsd = usd ?? 0;
+      earnedPast += day.earnedUsd;
+      const r = baseline > 0 ? day.earnedUsd / baseline : 0;
+      day.status = !e ? "nodata" : r >= 0.98 ? "done" : r >= 0.5 ? "partial" : "missed";
+      day.ratio = r;
+    } else if (n === todayN) {
+      day.status = "today";
+      day.earnedFlower = e ? e.flower : 0;
+      day.earnedUsd = usd ?? 0;
+    } else day.status = "future";
+    days.push(day);
+  }
+
+  // Reparto de lo que falta entre hoy y los días que vienen.
+  const remaining = Math.max(0, goal - earnedPast);
+  const ahead = days.filter((d) => d.status === "today" || d.status === "future");
+  const wSum = ahead.reduce((a, d) => a + d.weight, 0);
+  for (const d of ahead) {
+    d.targetUsd = wSum > 0 ? (remaining * d.weight) / wSum : 0;
+    d.targetFlower = usdPerFlowerNow ? d.targetUsd / usdPerFlowerNow : null;
+    if (capacityUsdDay) d.demanding = d.weight > 0 && d.targetUsd > capacityUsdDay * Math.max(1, d.weight) * 1.05;
+  }
+  const t = days[todayN - 1];
+  if (t.targetUsd > 0) {
+    t.ratio = t.earnedUsd / t.targetUsd;
+    if (t.ratio >= 0.98) t.status = "today-done";
+  }
+
+  // Pronóstico de fin de mes: lo ya ganado + tu ritmo diario en los días que vas a jugar.
+  const futureActive = days.filter((d) => d.status === "future" && d.weight > 0).length;
+  const todayPart = t.weight > 0 ? Math.max(t.earnedUsd || 0, capacityUsdDay || 0) : t.earnedUsd || 0;
+  const forecast = capacityUsdDay != null ? earnedPast + todayPart + capacityUsdDay * futureActive : null;
+
+  return {
+    year: y,
+    month: m,
+    daysInMonth,
+    startN,
+    prorated: startN > 1,
+    goal,
+    baseline,
+    earnedPast,
+    earnedToday: t.earnedUsd || 0,
+    remaining,
+    forecast,
+    days,
+    doneCount: days.filter((d) => d.status === "done").length,
+    missedCount: days.filter((d) => d.status === "missed" || d.status === "partial").length,
+  };
+}
+
+// Sugiere qué vender del inventario para cubrir una cantidad de FLOWER.
+export function coverWithInventory(inventoryRows, flowerNeeded, max = 3) {
+  const out = [];
+  let left = flowerNeeded;
+  for (const r of inventoryRows) {
+    if (left <= 0 || out.length >= max) break;
+    const perUnit = r.value / r.sellable;
+    if (!(perUnit > 0)) continue;
+    const units = Math.min(r.sellable, Math.ceil(left / perUnit));
+    out.push({ item: r.item, units, flower: units * perUnit, have: r.sellable });
+    left -= units * perUnit;
+  }
+  return { picks: out, covered: flowerNeeded - Math.max(0, left), short: Math.max(0, left) };
+}

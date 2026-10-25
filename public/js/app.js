@@ -1,7 +1,7 @@
 import { CROPS, FRUITS, NODES, ANIMALS, BOOSTS, DEFAULTS, LABELS, CATEGORY_LABEL, SEASON_CROPS, SEASON_LABEL } from "./data.js";
 import { compute, detectFarm, fmt } from "./engine.js";
 import { icon } from "./icons.js";
-import { analyzeDeliveries, analyzeInventory, reservedByDeliveries, upcomingEvents, coinBounties, historyMetrics } from "./insights.js";
+import { analyzeDeliveries, analyzeInventory, reservedByDeliveries, upcomingEvents, coinBounties, historyMetrics, monthCalendar, coverWithInventory } from "./insights.js";
 
 const LS_STATE = "dongranjero:state:v1";
 const LS_FARM = "dongranjero:farm:v1";
@@ -35,6 +35,7 @@ let detected = farmPayload ? detectFarm(farmPayload.data) : null;
 let result = null;
 let history = null; // respuesta de /api/history
 let historyError = "";
+let selectedDay = null; // fecha elegida en el calendario
 let insights = { deliveries: [], inventory: { rows: [], total: 0 }, events: [], bounties: [], metrics: null };
 let rankFilter = "all";
 const status = { farm: "", market: "" };
@@ -128,7 +129,8 @@ async function loadMarket() {
 
 async function loadHistory() {
   try {
-    const res = await fetch(`/api/history?farm=${encodeURIComponent(state.farmId)}`);
+    const tz = detected?.timezone || "America/Argentina/Buenos_Aires";
+    const res = await fetch(`/api/history?farm=${encodeURIComponent(state.farmId)}&tz=${encodeURIComponent(tz)}`);
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || `Error ${res.status}`);
     history = body;
@@ -170,6 +172,7 @@ function recompute(animate = false) {
   renderFarm();
   renderSettings();
   renderEvents();
+  renderCalendar();
   renderSell();
   renderHistory();
 }
@@ -185,6 +188,7 @@ function buildInsights() {
     deliveries,
     inventory: farm ? analyzeInventory(farm, { price: priceFn, fee: result.fee, liquidity: state.liquidity, reserved, stats: history?.priceStats }) : { rows: [], total: 0 },
     events: farm ? upcomingEvents(farm, today) : [],
+    monthEvents: farm ? upcomingEvents(farm, today.slice(0, 8) + "01", 60) : [],
     bounties: farm ? coinBounties(farm) : [],
     metrics: historyMetrics(history),
   };
@@ -475,6 +479,157 @@ function renderTables() {
         .join("") +
       "</tbody>"
     : `<tbody><tr><td>Sin parches de fruta o sin precios.</td></tr></tbody>`;
+}
+
+/* ---------- Calendario mensual ---------- */
+
+const MONTHS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const WEEKDAYS = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"];
+
+function renderCalendar() {
+  const t = result.totals;
+  const today = insights.today;
+  if (!today) return;
+  const monthKey = today.slice(0, 7);
+
+  // Reinicio mensual: se borran las marcas de días de meses anteriores.
+  const w = state.dayWeights || {};
+  const kept = Object.fromEntries(Object.entries(w).filter(([d]) => d.startsWith(monthKey)));
+  if (Object.keys(kept).length !== Object.keys(w).length) {
+    state.dayWeights = kept;
+    saveState();
+  }
+
+  const m = insights.metrics;
+  const capacityUsdDay = t.usdPerFlower ? (m ? m.earnedPerDay * t.usdPerFlower : t.usdMonth != null ? t.usdMonth / 30 : null) : null;
+  const cal = monthCalendar({
+    history,
+    today,
+    goalUsd: state.targetUsd,
+    usdPerFlowerNow: t.usdPerFlower,
+    cashout: (state.cashoutFee || 0) / 100,
+    weights: state.dayWeights || {},
+    events: insights.monthEvents,
+    capacityUsdDay,
+  });
+  insights.calendar = cal;
+  if (!selectedDay || !selectedDay.startsWith(monthKey)) selectedDay = today;
+
+  $("#calTitle").textContent = `${MONTHS[cal.month - 1]} ${cal.year}`;
+  const progress = cal.earnedPast + cal.earnedToday;
+  $("#calSum").textContent = `US$ ${fmt(progress, 2)} / ${fmt(cal.goal, 2)}`;
+
+  const hints = [];
+  if (!history) hints.push("El calendario usa el historial del Worker. Mientras no haya datos, muestra lo que tenés que hacer desde hoy.");
+  if (cal.prorated) hints.push(`La meta de este mes se prorratea desde el día ${cal.startN}, el primero con datos.`);
+  if (cal.forecast != null) {
+    hints.push(
+      cal.forecast >= cal.goal
+        ? `Con tu ritmo ${m ? "real" : "proyectado"} cerrarías el mes en US$ ${fmt(cal.forecast, 2)}: llegás.`
+        : `Con tu ritmo ${m ? "real" : "proyectado"} cerrarías el mes en US$ ${fmt(cal.forecast, 2)}: te faltarían US$ ${fmt(cal.goal - cal.forecast, 2)}.`
+    );
+  }
+  hints.push("Tocá un día para ver el detalle o marcarlo como libre o fuerte.");
+  $("#calHint").textContent = hints.join(" ");
+
+  // Grilla (semana empieza el lunes)
+  const firstWd = (new Date(cal.year, cal.month - 1, 1).getDay() + 6) % 7;
+  let html = WEEKDAYS.map((d) => `<div class="cal-wd" role="columnheader">${d}</div>`).join("");
+  html += Array.from({ length: firstWd }, () => `<div></div>`).join("");
+  for (const d of cal.days) {
+    const cls = [d.status];
+    if (d.weight === 0 && (d.status === "future" || d.status === "today")) cls.push("off");
+    if (d.demanding) cls.push("demanding");
+    let ico = "";
+    let amt = "";
+    let extra = "";
+    if (d.status === "done") { ico = icon("Sunflower", { size: 24 }); amt = fmt(d.earnedUsd, 2); }
+    else if (d.status === "partial") { ico = icon("sprout", { size: 24 }); amt = fmt(d.earnedUsd, 2); }
+    else if (d.status === "missed") { ico = icon("wilted", { size: 24 }); amt = fmt(d.earnedUsd, 2); }
+    else if (d.status === "today-done") { ico = icon("Sunflower", { size: 24 }); amt = "¡Cumplido!"; }
+    else if (d.status === "today") {
+      ico = d.weight === 0 ? "" : icon("sprout", { size: 24 });
+      amt = d.weight === 0 ? "libre" : fmt(d.targetUsd, 2);
+      extra = d.weight === 0 ? "" : `<span class="prog"><i style="width:${Math.min(100, Math.round((d.ratio || 0) * 100))}%"></i></span>`;
+    } else if (d.status === "future") {
+      ico = d.events.some((e) => e.name === "doubleDelivery") ? icon("sack", { size: 20 }) : "";
+      amt = d.weight === 0 ? "libre" : fmt(d.targetUsd, 2);
+    }
+    const wt = d.weight === 1.5 && (d.status === "future" || d.status === "today") ? `<span class="wt">×1,5</span>` : "";
+    const label = `${d.n} de ${MONTHS[cal.month - 1]}: ${amt ? (amt === "libre" ? "libre" : `US$ ${amt}`) : "sin datos"}`;
+    html += `<button type="button" class="cal-day ${cls.join(" ")}" data-day="${d.date}" role="gridcell" aria-selected="${d.date === selectedDay}" aria-label="${esc(label)}" ${d.status === "nodata" ? "disabled" : ""}>
+      <span class="dn">${d.n}</span>${wt}${ico}<span class="amt">${esc(amt)}</span>${extra}</button>`;
+  }
+  $("#calGrid").innerHTML = html;
+
+  $("#calLegend").innerHTML = [
+    [icon("Sunflower", { size: 16 }), "Meta cumplida"],
+    [icon("sprout", { size: 16 }), "Más de la mitad"],
+    [icon("wilted", { size: 16 }), "No alcanzado"],
+    [icon("sack", { size: 16 }), "Entregas dobles"],
+    ["", "Montos en US$: lo ganado en días pasados y la meta en los que vienen"],
+  ]
+    .map(([i, l]) => `<span>${i}${l}</span>`)
+    .join("");
+
+  renderDayDetail(cal);
+}
+
+function renderDayDetail(cal) {
+  const t = result.totals;
+  const d = cal.days.find((x) => x.date === selectedDay);
+  const el = $("#calDetail");
+  if (!d) {
+    el.innerHTML = "";
+    return;
+  }
+  const title = `${d.n} de ${MONTHS[cal.month - 1]}`;
+  const evs = d.events.map((e) => `<li>${icon(e.name === "doubleDelivery" ? "sack" : "bell", { size: 18 })}${esc(e.title)}: ${esc(e.note)}</li>`).join("");
+  const segment = () => `<div class="seg" role="group" aria-label="Tipo de día">
+      ${[[1, "Normal"], [1.5, "Fuerte ×1,5"], [0, "Libre"]]
+        .map(([v, l]) => `<button type="button" data-weight="${v}" class="${d.weight === v ? "on" : ""}">${l}</button>`)
+        .join("")}
+    </div>`;
+  let html = "";
+
+  if (d.status === "nodata") {
+    html = `<h4>${icon("calendar", { size: 20 })}${title}</h4><p>Sin registro: el Worker todavía no guardaba datos ese día.</p>`;
+  } else if (["done", "partial", "missed"].includes(d.status)) {
+    const msg = { done: "Meta del día cumplida.", partial: "Llegaste a más de la mitad de la meta del día.", missed: "No se alcanzó la meta del día. Lo faltante ya está repartido entre los días que quedan." }[d.status];
+    html = `<h4>${icon(d.status === "done" ? "Sunflower" : d.status === "partial" ? "sprout" : "wilted", { size: 20 })}${title}</h4>
+      <p>Ganaste <strong>${fmt(d.earnedFlower, 2)} FLOWER</strong> (≈ US$ ${fmt(d.earnedUsd, 2)}) contra una meta diaria de US$ ${fmt(cal.baseline, 2)}.</p>
+      <p>${msg}${d.merged ? " Este día incluye datos de días anteriores sin registro." : ""}</p>${evs ? `<ul>${evs}</ul>` : ""}`;
+  } else {
+    const isToday = d.status === "today" || d.status === "today-done";
+    if (d.weight === 0) {
+      html = `<h4>${icon("calendar", { size: 20 })}${title}${isToday ? " · hoy" : ""}</h4><p>Marcado como <strong>libre</strong>: su parte de la meta se reparte en los demás días.</p>${evs ? `<ul>${evs}</ul>` : ""}${segment()}`;
+    } else {
+      const missingFlower = isToday && d.targetFlower != null ? Math.max(0, d.targetFlower - d.earnedFlower) : d.targetFlower;
+      let todo = "";
+      if (missingFlower > 0.01) {
+        const cover = coverWithInventory(insights.inventory.rows, missingFlower);
+        const deliv = insights.deliveries.filter((x) => x.kind === "flower" && x.margin > 0 && x.haveAll).slice(0, 2);
+        const items = [
+          ...deliv.map((x) => `<li>${icon("sack", { size: 18 })}Completá la entrega de <strong class="npc">${esc(x.from)}</strong>: ${fmt(x.rewardFlower, 2)} FLOWER</li>`),
+          ...cover.picks.map((p) => `<li>${ic(p.item, 18)}Vendé <strong>${fmt(p.units, 0)} ${esc(label(p.item))}</strong> ≈ ${fmt(p.flower, 2)} FLOWER</li>`),
+        ];
+        const prodTop = result.streams.find((s) => s.netFlowerDay > 0);
+        if (!isToday && prodTop) items.push(`<li>${ic(prodTop.name, 18)}Producí y vendé <strong>${esc(label(prodTop.name))}</strong>: tu plan rinde ${fmt(prodTop.netFlowerDay, 2)} FLOWER por día.</li>`);
+        todo = `<p>${isToday ? "Para completar hoy" : "Para ese día"} podés:</p><ul>${items.join("")}</ul>${
+          cover.short > 0.01 && isToday ? `<p class="hint">El inventario no alcanza para cubrir todo: faltarían ${fmt(cover.short, 2)} FLOWER de producción nueva.</p>` : ""
+        }`;
+      }
+      const prog = isToday
+        ? `<p>Llevás <strong>${fmt(d.earnedFlower, 2)} FLOWER</strong> de <strong>${fmt(d.targetFlower, 2)}</strong> (US$ ${fmt(d.earnedUsd, 2)} de ${fmt(d.targetUsd, 2)}).</p>
+           <div class="bigbar"><i style="width:${Math.min(100, Math.round((d.ratio || 0) * 100))}%"></i></div>`
+        : `<p>Meta del día: <strong>${fmt(d.targetFlower, 2)} FLOWER</strong> (≈ US$ ${fmt(d.targetUsd, 2)}).</p>`;
+      const warn = d.demanding ? `<p class="hint">Es más de lo que venís ganando por día. Marcá algún día como fuerte o subí sesiones para repartir mejor.</p>` : "";
+      html = `<h4>${icon(d.status === "today-done" ? "Sunflower" : "sprout", { size: 20 })}${title}${isToday ? " · hoy" : ""}</h4>${prog}${
+        d.status === "today-done" ? "<p>¡Meta del día cumplida! Lo que sumes de más aliviana los días que vienen.</p>" : todo
+      }${warn}${evs ? `<ul>${evs}</ul>` : ""}${segment()}`;
+    }
+  }
+  el.innerHTML = html;
 }
 
 /* ---------- Eventos, Vender, Historial ---------- */
@@ -953,6 +1108,21 @@ function bind() {
   };
   $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   $("#settingsBtn").addEventListener("click", () => showTab("ajustes"));
+
+  $("#calGrid").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-day]");
+    if (!b || b.disabled) return;
+    selectedDay = b.dataset.day;
+    renderCalendar();
+  });
+  $("#calDetail").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-weight]");
+    if (!b || !selectedDay) return;
+    const v = Number(b.dataset.weight);
+    state.dayWeights = { ...(state.dayWeights || {}), [selectedDay]: v };
+    saveState();
+    renderCalendar();
+  });
 
   $("#refreshBtn").addEventListener("click", () => refreshAll(true));
 

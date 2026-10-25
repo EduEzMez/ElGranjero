@@ -139,4 +139,5 @@ export const DEFAULTS = {
   animalCfg: {},
   liquidity: {}, // unidades/día que estimás que el mercado absorbe sin tirar el precio
   excluded: [],
+  dayWeights: {}, // marcas del calendario: { "2026-10-27": 0 | 1 | 1.5 } (se borran al cambiar de mes)
 };
