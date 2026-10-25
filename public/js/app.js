@@ -45,19 +45,48 @@ function writeLS(k, v) {
 
 /* ---------- Datos remotos ---------- */
 
-async function loadFarm(id) {
+function ago(iso) {
+  const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (!Number.isFinite(min)) return "";
+  if (min < 1) return "recién";
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.round(min / 60);
+  return h < 48 ? `hace ${h} h` : `hace ${Math.round(h / 24)} días`;
+}
+
+const FARM_MIN_AGE_MS = 5 * 60 * 1000;
+
+async function loadFarm(id, { force = false } = {}) {
+  // Si los datos guardados tienen menos de 5 minutos, no se vuelve a consultar.
+  const sameFarm = farmPayload?.farmId === Number(id);
+  const age = farmPayload?.fetchedAt ? Date.now() - new Date(farmPayload.fetchedAt).getTime() : Infinity;
+  if (!force && sameFarm && age < FARM_MIN_AGE_MS) return;
+
   status.farm = `Cargando granja #${id}…`;
   renderStatus();
   try {
     const res = await fetch(`/api/farm/${encodeURIComponent(id)}`);
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error([body.error, body.hint].filter(Boolean).join(" ") || `Error ${res.status}`);
-    farmPayload = { fetchedAt: body.fetchedAt, data: body.data };
+    if (!res.ok) {
+      const err = new Error([body.error, body.hint].filter(Boolean).join(". ") || `Error ${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    farmPayload = { farmId: Number(id), fetchedAt: body.fetchedAt, data: body.data };
     writeLS(LS_FARM, farmPayload);
     detected = detectFarm(body.data);
-    status.farm = "";
+    status.farm = body.stale
+      ? `La API de Sunflower Land está limitando consultas: se muestran los datos de ${ago(body.fetchedAt)}. Se actualizan solos en unos minutos.`
+      : "";
   } catch (err) {
-    status.farm = `No se pudo cargar la granja: ${err.message.replace(/\.+$/, "")}. Podés cargar las cantidades a mano en la pestaña Granja.`;
+    if (sameFarm && farmPayload?.data) {
+      status.farm =
+        err.status === 429
+          ? `La API de Sunflower Land está limitando consultas: se muestran tus datos guardados de ${ago(farmPayload.fetchedAt)}. Probá de nuevo en unos minutos.`
+          : `No se pudo actualizar la granja (${err.message.replace(/\.+$/, "")}). Se muestran tus datos guardados de ${ago(farmPayload.fetchedAt)}.`;
+    } else {
+      status.farm = `No se pudo cargar la granja: ${err.message.replace(/\.+$/, "")}. Podés cargar las cantidades a mano en la pestaña Granja.`;
+    }
   }
 }
 
@@ -77,11 +106,11 @@ async function loadMarket() {
   }
 }
 
-async function refreshAll() {
+async function refreshAll(force = false) {
   const btn = $("#refreshBtn");
   btn.classList.add("spin");
   btn.disabled = true;
-  await Promise.all([loadFarm(state.farmId), loadMarket()]);
+  await Promise.all([loadFarm(state.farmId, { force }), loadMarket()]);
   btn.classList.remove("spin");
   btn.disabled = false;
   recompute(true);
@@ -122,7 +151,7 @@ function renderHeader() {
 
 function renderStatus() {
   const msgs = [status.farm, status.market].filter(Boolean);
-  $("#statusBar").innerHTML = msgs.map((m) => `<div class="${/No se|incompletos/.test(m) ? "err" : "ok"}">${esc(m)}</div>`).join("");
+  $("#statusBar").innerHTML = msgs.map((m) => `<div class="${/No se|incompletos|limitando/.test(m) ? "err" : "ok"}">${esc(m)}</div>`).join("");
 }
 
 function renderGoal(animate) {
@@ -553,7 +582,7 @@ function bind() {
     })
   );
 
-  $("#refreshBtn").addEventListener("click", refreshAll);
+  $("#refreshBtn").addEventListener("click", () => refreshAll(true));
 
   $("#targetUsd").addEventListener("input", (e) => {
     const v = Number(e.target.value);
@@ -629,7 +658,7 @@ function bind() {
       state.countOverrides = {};
       saveState();
     }
-    await loadFarm(id);
+    await loadFarm(id, { force: true });
     recompute(true);
   });
 
@@ -707,7 +736,7 @@ function bind() {
   $("#pasteBtn").addEventListener("click", () => {
     try {
       const data = JSON.parse($("#pasteJson").value);
-      farmPayload = { fetchedAt: new Date().toISOString(), data };
+      farmPayload = { farmId: state.farmId, fetchedAt: new Date().toISOString(), data };
       writeLS(LS_FARM, farmPayload);
       detected = detectFarm(data);
       status.farm = "Granja cargada desde el JSON pegado.";
