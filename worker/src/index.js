@@ -48,7 +48,7 @@ async function run(env, { force = false } = {}) {
       await writeLatestFarm(db, id, data);
       await saveSnapshot(db, id, farm, env.TIMEZONE);
       log.sales = await saveSales(db, id, farm);
-      const timers = computeTimers(farm);
+      const timers = computeTimers(farm, env.TIMEZONE);
       await saveTimers(db, id, timers);
       log.timers = timers.length;
       await writeMeta(db, { lastFarmAt: new Date().toISOString(), lastFarmError: "", farmStrikes: "0", farmBlockedUntil: "0" });
@@ -102,13 +102,24 @@ async function notifyReady(env, id) {
     .all();
   if (!results?.length) return 0;
 
-  const lines = results.map((r) => `• ${escapeHtml(r.label)}`);
+  // Las islas flotantes que ya cerraron se marcan como avisadas sin mandar nada.
+  const isOpenIsland = (r) => !r.key.startsWith("island:") || Number(r.key.split(":")[2]) > now;
+  const expired = results.filter((r) => !isOpenIsland(r));
+  const toSend = results.filter(isOpenIsland);
+  if (expired.length) await env.DB.batch(expired.map((r) => env.DB.prepare("UPDATE timers SET notified = 1 WHERE farm_id = ? AND key = ?").bind(id, r.key)));
+  if (!toSend.length) return 0;
+
+  const islands = toSend.filter((r) => r.key.startsWith("island:"));
+  const harvest = toSend.filter((r) => !r.key.startsWith("island:"));
+  const parts = [];
+  if (islands.length) parts.push(islands.map((r) => `<b>${escapeHtml(r.label)}</b>`).join("\n"));
+  if (harvest.length) parts.push(`🌻 <b>Listo para cosechar</b>\n${harvest.map((r) => `• ${escapeHtml(r.label)}`).join("\n")}`);
   const link = env.SITE_URL ? `\n\n<a href="${env.SITE_URL}">Abrir DonGranjero</a>` : "";
-  const ok = await sendTelegram(env, `🌻 <b>Listo para cosechar</b>\n${lines.join("\n")}${link}`);
+  const ok = await sendTelegram(env, `${parts.join("\n\n")}${link}`);
   if (ok) {
-    await env.DB.batch(results.map((r) => env.DB.prepare("UPDATE timers SET notified = 1 WHERE farm_id = ? AND key = ?").bind(id, r.key)));
+    await env.DB.batch(toSend.map((r) => env.DB.prepare("UPDATE timers SET notified = 1 WHERE farm_id = ? AND key = ?").bind(id, r.key)));
   }
-  return ok ? results.length : 0;
+  return ok ? toSend.length : 0;
 }
 
 function inQuietHours(env) {

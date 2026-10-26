@@ -6,7 +6,13 @@ const UA = { accept: "application/json", "user-agent": "DonGranjero/1.0" };
 export async function getJson(url, headers = {}) {
   const res = await fetch(url, { headers: { ...UA, ...headers } });
   if (!res.ok) {
-    const err = new Error(`${url} respondió ${res.status}`);
+    // Se guarda lo que explica la API (cuerpo y headers de límite) para poder diagnosticar un 429.
+    const body = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 160);
+    const limits = [...res.headers.entries()]
+      .filter(([k]) => /^(retry-after|x-ratelimit)/i.test(k))
+      .map(([k, v]) => `${k}=${v}`)
+      .join(" ");
+    const err = new Error(`${url} respondió ${res.status}${body ? `: ${body}` : ""}${limits ? ` [${limits}]` : ""}`);
     err.status = res.status;
     err.retryAfter = res.headers.get("retry-after");
     throw err;
@@ -65,21 +71,49 @@ export async function fetchMarket(env) {
     pricesUpdatedAt = root?.updatedAt ?? pricesRes.value?.updatedAt ?? null;
   } else errors.push({ source: "prices", message: String(pricesRes.reason?.message || pricesRes.reason) });
 
+  // Todos los pools de FLOWER con liquidez real, y un promedio ponderado por liquidez.
   let flowerUsd = null;
   let flowerPair = null;
+  let pools = [];
+  const minLiq = Number(env.MIN_POOL_LIQUIDITY_USD) || 1000;
   if (dexRes.status === "fulfilled") {
-    const pairs = (dexRes.value?.pairs || []).filter((p) => p?.baseToken?.address?.toLowerCase() === token && Number(p.priceUsd) > 0);
-    pairs.sort((a, b) => (b?.liquidity?.usd || 0) - (a?.liquidity?.usd || 0));
-    if (pairs[0]) {
-      flowerUsd = Number(pairs[0].priceUsd);
+    for (const p of dexRes.value?.pairs || []) {
+      const base = p?.baseToken?.address?.toLowerCase();
+      const quote = p?.quoteToken?.address?.toLowerCase();
+      let price = null;
+      if (base === token) price = Number(p.priceUsd);
+      else if (quote === token && Number(p.priceNative) > 0) price = Number(p.priceUsd) / Number(p.priceNative); // FLOWER del lado cotizado
+      if (!(price > 0)) continue;
+      pools.push({
+        id: p.pairAddress,
+        dex: p.dexId,
+        chain: p.chainId,
+        pair: `${p.baseToken?.symbol || "?"}/${p.quoteToken?.symbol || "?"}`,
+        priceUsd: price,
+        liquidityUsd: Number(p?.liquidity?.usd) || 0,
+        volume24hUsd: Number(p?.volume?.h24) || 0,
+        change24h: p?.priceChange?.h24 ?? null,
+        url: p.url || null,
+      });
+    }
+    pools.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
+    const real = pools.filter((x) => x.liquidityUsd >= minLiq);
+    const use = real.length ? real : pools.slice(0, 1);
+    const wSum = use.reduce((a, x) => a + (x.liquidityUsd || 1), 0);
+    if (use.length) {
+      flowerUsd = use.reduce((a, x) => a + x.priceUsd * (x.liquidityUsd || 1), 0) / wSum;
+      const top = use[0];
       flowerPair = {
-        dex: pairs[0].dexId,
-        chain: pairs[0].chainId,
-        liquidityUsd: pairs[0]?.liquidity?.usd ?? null,
-        volume24hUsd: pairs[0]?.volume?.h24 ?? null,
-        change24h: pairs[0]?.priceChange?.h24 ?? null,
+        dex: top.dex,
+        chain: top.chain,
+        pools: use.length,
+        liquidityUsd: use.reduce((a, x) => a + x.liquidityUsd, 0),
+        volume24hUsd: use.reduce((a, x) => a + x.volume24hUsd, 0),
+        change24h: top.change24h,
+        method: use.length > 1 ? "promedio" : "pool",
       };
-    } else errors.push({ source: "flower", message: "No se encontró un par con precio para FLOWER." });
+    } else errors.push({ source: "flower", message: "No se encontró un pool con precio para FLOWER." });
+    pools = pools.slice(0, 8).map((x) => ({ ...x, used: x.liquidityUsd >= minLiq }));
   } else errors.push({ source: "flower", message: String(dexRes.reason?.message || dexRes.reason) });
 
   let ars = null;
@@ -92,7 +126,7 @@ export async function fetchMarket(env) {
     };
   }
 
-  return { fetchedAt: new Date().toISOString(), pricesUpdatedAt, prices, flowerUsd, flowerPair, ars, errors };
+  return { fetchedAt: new Date().toISOString(), pricesUpdatedAt, prices, flowerUsd, flowerPair, pools, ars, errors };
 }
 
 /* ---------- Historial ---------- */
@@ -153,7 +187,9 @@ const live = (o) => Object.values(o || {}).filter((n) => n && typeof n === "obje
 const lbl = (n) => LABELS[n] || n;
 
 // Devuelve grupos { key, label, readyAt } (nodos del mismo tipo listos con menos de 10 min de diferencia).
-export function computeTimers(farm) {
+const hhmm = (ms, tz) => new Intl.DateTimeFormat("es-AR", { timeZone: tz || "America/Argentina/Buenos_Aires", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms));
+
+export function computeTimers(farm, tz) {
   const events = [];
   const push = (kind, name, readyAt) => Number.isFinite(readyAt) && readyAt > 0 && events.push({ kind, name, readyAt });
 
@@ -180,6 +216,17 @@ export function computeTimers(farm) {
   }
 
   events.sort((a, b) => a.readyAt - b.readyAt);
+
+  // Isla flotante: aviso unos minutos antes de cada apertura del horario que trae la granja.
+  const islandLead = 5 * 60e3;
+  const island = (farm.floatingIsland?.schedule || [])
+    .filter((w) => Number(w?.startAt) > 0 && Number(w?.endAt) > Date.now())
+    .map((w) => ({
+      // La hora de cierre va en la clave para no avisar una isla que ya cerró.
+      key: `island:${w.startAt}:${w.endAt}`,
+      label: `🏝️ La isla flotante abre a las ${hhmm(w.startAt, tz)} y cierra a las ${hhmm(w.endAt, tz)}`,
+      readyAt: Math.round(Number(w.startAt) - islandLead),
+    }));
   const groups = [];
   for (const e of events) {
     const g = groups.find((x) => x.kind === e.kind && x.name === e.name && e.readyAt - x.first <= 10 * 60e3);
@@ -190,14 +237,14 @@ export function computeTimers(farm) {
   }
   const noun = { crop: "parcelas de", fruit: "parches de", node: "", animal: "", building: "" };
   const animalName = { Chicken: "gallinas", Cow: "vacas", Sheep: "ovejas" };
-  return groups.map((g) => {
+  return [...island, ...groups.map((g) => {
     let label;
     if (g.kind === "animal") label = `${g.count} ${animalName[g.name] || g.name} despiertas`;
     else if (g.kind === "building") label = `${g.name}: producción lista`;
     else if (g.kind === "node") label = `${g.count} × ${lbl(g.name)}`;
     else label = `${g.count} ${noun[g.kind]} ${lbl(g.name)}`;
     return { key: `${g.kind}:${g.name}:${Math.round(g.first / 60e3)}`, label, readyAt: Math.round(g.readyAt) };
-  });
+  })];
 }
 
 export async function saveTimers(db, id, timers) {

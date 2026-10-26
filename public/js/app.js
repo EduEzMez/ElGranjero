@@ -36,6 +36,7 @@ let result = null;
 let history = null; // respuesta de /api/history
 let historyError = "";
 let selectedDay = null; // fecha elegida en el calendario
+let farmStaleAt = null; // fecha de la foto guardada cuando el Worker no pudo renovarla
 let insights = { deliveries: [], inventory: { rows: [], total: 0 }, events: [], bounties: [], metrics: null };
 let rankFilter = "all";
 const status = { farm: "", market: "" };
@@ -96,9 +97,8 @@ async function loadFarm(id, { force = false } = {}) {
     farmPayload = { farmId: Number(id), fetchedAt: body.fetchedAt, data: body.data };
     writeLS(LS_FARM, farmPayload);
     detected = detectFarm(body.data);
-    status.farm = body.stale
-      ? `La API de Sunflower Land está limitando consultas: se muestran los datos de ${ago(body.fetchedAt)}. Se actualizan solos en unos minutos.`
-      : "";
+    farmStaleAt = body.stale ? body.fetchedAt : null;
+    status.farm = "";
   } catch (err) {
     if (sameFarm && farmPayload?.data) {
       status.farm =
@@ -157,8 +157,20 @@ async function refreshAll(force = false) {
 
 /* ---------- Cálculo y render ---------- */
 
+// Precio de FLOWER según la fuente elegida: promedio de pools (auto), un pool puntual o manual.
+function marketView() {
+  if (!market) return market;
+  const src = state.flowerSource || "auto";
+  if (src !== "auto") {
+    const pool = (market.pools || []).find((p) => p.id === src);
+    if (pool) return { ...market, flowerUsd: pool.priceUsd, flowerSourceLabel: `${pool.dex} ${pool.pair}` };
+  }
+  const n = market.flowerPair?.pools || 0;
+  return { ...market, flowerSourceLabel: n > 1 ? `promedio de ${n} pools` : market.flowerPair?.dex || "" };
+}
+
 function recompute(animate = false) {
-  result = compute({ state, detected, market });
+  result = compute({ state, detected, market: marketView() });
   buildInsights();
   renderHeader();
   renderStatus();
@@ -211,9 +223,29 @@ function renderHeader() {
   $("#farmLine").textContent = `Granja #${state.farmId}${who}${when}`;
 }
 
+// Explica por qué los datos de la granja no son recientes, usando el estado real del Worker.
+function staleNote() {
+  if (!farmStaleAt) return null;
+  const cron = history?.cron || {};
+  const err = String(cron.lastFarmError || "");
+  const ageMs = Date.now() - Date.parse(farmStaleAt);
+  let why;
+  if (/429/.test(err)) why = "La API de Sunflower Land está limitando consultas y el Worker reintenta solo";
+  else if (err) why = `El Worker no pudo actualizarlos (${err.split(". Próximo")[0].replace("https://api.sunflower-land.com", "")})`;
+  else if (cron.lastRunAt && Date.now() - Date.parse(cron.lastRunAt) > 15 * 60e3) why = "El Worker no corrió en los últimos minutos: revisá el cron en Cloudflare";
+  else if (!history) why = "No se pudo consultar el estado del Worker";
+  else why = "El Worker todavía no los renovó";
+  // Hasta 6 horas es solo un aviso: para planificar, la granja cambia despacio.
+  return { text: `Mostrando datos de ${ago(farmStaleAt)}. ${why}.`, cls: ageMs > 6 * 3600e3 ? "err" : "ok" };
+}
+
 function renderStatus() {
-  const msgs = [status.farm, status.market].filter(Boolean);
-  $("#statusBar").innerHTML = msgs.map((m) => `<div class="${/No se|incompletos|limitando/.test(m) ? "err" : "ok"}">${esc(m)}</div>`).join("");
+  const rows = [];
+  const stale = staleNote();
+  if (stale) rows.push(stale);
+  if (status.farm) rows.push({ text: status.farm, cls: /No se pudo/.test(status.farm) ? "err" : "ok" });
+  if (status.market) rows.push({ text: status.market, cls: /No se|incompletos/.test(status.market) ? "err" : "ok" });
+  $("#statusBar").innerHTML = rows.map((r) => `<div class="${r.cls}">${esc(r.text)}</div>`).join("");
 }
 
 function renderGoal(animate) {
@@ -274,7 +306,7 @@ function renderFlower() {
 
   const stats = [];
   if (!manual && pair?.volume24hUsd != null) stats.push(["Volumen 24 h", `US$ ${compact(pair.volume24hUsd)}`]);
-  if (!manual && pair?.liquidityUsd != null) stats.push(["Liquidez", `US$ ${compact(pair.liquidityUsd)}`]);
+  if (!manual && pair?.liquidityUsd != null) stats.push([pair.pools > 1 ? `Liquidez (${pair.pools} pools)` : "Liquidez", `US$ ${compact(pair.liquidityUsd)}`]);
   if (detected?.flower != null && t.flowerUsd) {
     stats.push(["Tu saldo", `${fmt(detected.flower, 2)} FLOWER`]);
     stats.push(["Tu saldo vale", `US$ ${fmt(detected.flower * t.flowerUsd, 2)}`]);
@@ -286,7 +318,8 @@ function renderFlower() {
 
   const notes = [];
   if (arsRate) notes.push(`Pesos calculados con el dólar ${market.ars.nombre.toLowerCase()} (compra: $ ${fmt(arsRate, 2)}).`);
-  if (!manual && pair?.dex) notes.push(`Precio del par con más liquidez en ${pair.dex}.`);
+  const mv = marketView();
+  if (!manual && mv?.flowerSourceLabel) notes.push(`Fuente: ${mv.flowerSourceLabel} (cambiala en Ajustes).`);
   if (market?.fetchedAt) notes.push(`Actualizado ${ago(market.fetchedAt)}.`);
   $("#fNote").textContent = notes.join(" ");
 }
@@ -330,7 +363,7 @@ function renderAdvice() {
       const gap = t.neededFlowerDay - t.netFlowerDay;
       add(`Te faltan <strong>${fmt(gap, 2)} FLOWER por día</strong> para llegar a US$ ${fmt(state.targetUsd, 0)}.`, "warn");
       if (state.sessions < 12) {
-        const more = compute({ state, detected, market, sessionsOverride: Math.min(12, state.sessions + 2) });
+        const more = compute({ state, detected, market: marketView(), sessionsOverride: Math.min(12, state.sessions + 2) });
         const diff = more.totals.netFlowerDay - t.netFlowerDay;
         if (diff > 0.01) add(`Con 2 sesiones más por día sumarías ${fmt(diff, 2)} FLOWER diarios ${usd(diff)}.`, "warn");
       }
@@ -639,16 +672,31 @@ function fmtDate(iso) {
   return new Date(y, mo - 1, d).toLocaleDateString("es-AR", { weekday: "short", day: "numeric", month: "short" });
 }
 
+function islandWindows() {
+  const tz = detected?.timezone || "America/Argentina/Buenos_Aires";
+  const hm = (ms) => new Date(ms).toLocaleTimeString("es-AR", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  return (detected?.raw?.floatingIsland?.schedule || [])
+    .filter((w) => Number(w.endAt) > Date.now())
+    .slice(0, 3)
+    .map((w) => {
+      const open = Number(w.startAt) <= Date.now();
+      const day = todayIn(tz) === new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(w.startAt)) ? "Hoy" : "Mañana";
+      return `<li class="${open ? "today" : ""}">${icon("island", { size: 22 })}<time>${open ? "Ahora" : day}</time><div>Isla flotante ${open ? "abierta" : "abre"} ${open ? `hasta las ${hm(w.endAt)}` : `de ${hm(w.startAt)} a ${hm(w.endAt)}`}<small>Te avisamos por Telegram 5 minutos antes.</small></div></li>`;
+    })
+    .join("");
+}
+
 function renderEvents() {
   const ev = insights.events;
-  $("#events").innerHTML = ev.length
+  const isl = islandWindows();
+  $("#events").innerHTML = isl + (ev.length
     ? ev
         .map((e) => {
           const evIcon = e.name === "doubleDelivery" ? "sack" : e.name === "bountifulHarvest" ? "Wheat" : e.name === "fullMoon" ? "flowerToken" : "bell";
           return `<li class="${e.today ? "today" : ""}">${icon(evIcon, { size: 22 })}<time>${e.today ? "Hoy" : esc(fmtDate(e.date))}</time><div>${esc(e.title)}<small>${esc(e.note)}</small></div></li>`;
         })
         .join("")
-    : `<li class="empty">Sin eventos en el calendario.</li>`;
+    : isl ? "" : `<li class="empty">Sin eventos en el calendario.</li>`);
 }
 
 function renderSell() {
@@ -873,7 +921,7 @@ function evaluateCandidates() {
   const base = result.totals.netFlowerDay;
   const up = result.totals.usdPerFlower;
   return (state.candidates || []).map((c, idx) => {
-    const r = compute({ state, detected, market, extraBoosts: [c] });
+    const r = compute({ state, detected, market: marketView(), extraBoosts: [c] });
     const delta = r.totals.netFlowerDay - base;
     return {
       ...c,
@@ -1069,6 +1117,7 @@ function renderSettings() {
       ? `Usar la comisión real de mis ventas (${fmt(detected.marketFee, 1)}%) en vez del valor de arriba`
       : "Usar la comisión real de mis ventas (todavía no hay ventas detectadas)";
   $("#useObservedTimes").checked = state.useObservedTimes !== false;
+  renderPools();
   const cron = history?.cron;
   $("#cronStatus").textContent = cron?.lastRunAt
     ? `Worker activo: última corrida ${ago(cron.lastRunAt)}, última consulta de la granja ${cron.lastFarmAt ? ago(cron.lastFarmAt) : "–"}.${cron.lastFarmError ? ` Último error: ${cron.lastFarmError}.` : ""}`
@@ -1096,6 +1145,37 @@ function renderSettings() {
       }).join("") +
       `</tbody>`;
   }
+}
+
+function renderPools() {
+  const box = $("#poolList");
+  if (!box) return;
+  const pools = market?.pools || [];
+  const src = state.flowerSource || "auto";
+  const manual = Number(state.flowerUsdOverride) > 0;
+  if (!pools.length) {
+    box.innerHTML = `<p class="hint">Todavía no hay datos de pools.</p>`;
+    return;
+  }
+  const prices = pools.filter((p) => p.used).map((p) => p.priceUsd);
+  const spread = prices.length > 1 ? Math.max(...prices) / Math.min(...prices) - 1 : 0;
+  const opt = (value, title, sub, checked) =>
+    `<label class="pool ${checked ? "on" : ""}"><input type="radio" name="flowerSource" value="${esc(value)}" ${checked ? "checked" : ""}><span><strong>${title}</strong><small>${sub}</small></span></label>`;
+  let html = opt("auto", `Promedio de pools · US$ ${fmt(market.flowerUsd, 4)}`, "Ponderado por liquidez, solo pools con liquidez real. Recomendado.", src === "auto" && !manual);
+  html += pools
+    .map((p) =>
+      opt(
+        p.id,
+        `${esc(p.dex)} ${esc(p.pair)} · US$ ${fmt(p.priceUsd, 4)}`,
+        `Liquidez US$ ${compact(p.liquidityUsd)} · volumen 24 h US$ ${compact(p.volume24hUsd)}${p.used ? "" : " · poca liquidez, no entra en el promedio"}`,
+        src === p.id && !manual
+      )
+    )
+    .join("");
+  box.innerHTML =
+    html +
+    (manual ? `<p class="hint">Ahora se usa tu precio manual (US$ ${fmt(Number(state.flowerUsdOverride), 4)}). Borralo para volver a estas fuentes.</p>` : "") +
+    (spread > 0.15 ? `<p class="hint">Ojo: entre los pools hay hasta un ${fmt(spread * 100, 0)}% de diferencia. Usá el que se parezca más a lo que cobrás al vender.</p>` : "");
 }
 
 /* ---------- Eventos ---------- */
@@ -1244,6 +1324,14 @@ function bind() {
       recompute();
     });
   }
+
+  $("#poolList").addEventListener("change", (e) => {
+    if (e.target.name !== "flowerSource") return;
+    state.flowerSource = e.target.value;
+    state.flowerUsdOverride = null;
+    saveState();
+    recompute();
+  });
 
   $("#cropToggles").addEventListener("click", (e) => {
     const c = e.target.closest("[data-crop]")?.dataset.crop;

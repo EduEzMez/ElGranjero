@@ -428,3 +428,11 @@ input[type="range"] { padding: 0; accent-color: var(--grass); border: 0; backgro
 }
 /* Montos chicos con la misma letra redondeada que los números grandes */
 .cal-day .amt, .price-pill, .flower-stats dd, .rank .usd { font-family: var(--display); font-weight: 600; }
+
+/* Fuentes de precio de FLOWER */
+.pools { display: grid; gap: .45rem; margin-bottom: .5rem; }
+.pool { display: flex; gap: .6rem; align-items: flex-start; padding: .55rem .7rem; border: 2px solid var(--line); border-radius: 9px; background: var(--surface); cursor: pointer; }
+.pool.on { border-color: var(--edge); background: var(--sun-soft); }
+.pool input { width: 18px; height: 18px; min-height: 0; margin-top: .15rem; accent-color: var(--grass); flex: none; }
+.pool strong { display: block; font-size: .92rem; }
+.pool small { display: block; color: var(--muted); font-size: .8rem; }

@@ -11,7 +11,6 @@ pages_build_output_dir = "public"
 # La API key, si hace falta, cargala como secreto:  npx wrangler pages secret put SFL_API_KEY
 
 # Base D1 compartida con el Worker programado (historial).
-# Pegá el mismo database_id que en worker/wrangler.toml.
 # Importante: con este archivo en el repo, Cloudflare toma los bindings de acá y no del panel.
 [[d1_databases]]
 binding = "DB"

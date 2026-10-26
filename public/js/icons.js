@@ -230,6 +230,18 @@ const SHAPES = {
     ".baaaaaab.",
     "..........",
   ],
+  island: [
+    "...gg.....",
+    ".gghggg...",
+    "g..hb..g..",
+    "....b.....",
+    "....b.....",
+    "...b......",
+    "..ssssss..",
+    ".wsssssssw",
+    "wwwwwwwwww",
+    "..........",
+  ],
   trophy: [
     "..........",
     "..aaaaaa..",
@@ -374,6 +386,7 @@ const SPRITES = {
   barn: ["barn", { a: "#C9433E", c: "#E05A4E", b: "#FFF6E6" }],
   gear: ["gear", { a: "#8A8F99" }],
   calendar: ["calendar", { a: "#E05A4E", c: "#FFFDF5", d: "#3B2A1A", k: "#3B2A1A" }],
+  island: ["island", { g: "#6CC24A", h: "#3E8E2F", b: "#8A5A34", s: "#F2D58A", w: "#5AB0E0" }],
   bell: ["bell", { a: "#F6C33B", b: "#C48A16", c: "#FFE79A" }],
 };
 

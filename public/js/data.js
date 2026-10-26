@@ -130,6 +130,7 @@ export const DEFAULTS = {
   cashoutFee: 5, // % estimado de swap/bridge al pasar FLOWER a USD
   coinToFlower: 0, // valor de 1 coin en FLOWER (0 = los coins se muestran aparte)
   flowerUsdOverride: null,
+  flowerSource: "auto", // "auto" = promedio de pools; o el id de un pool puntual
   priceOverrides: {},
   countOverrides: {},
   enabledCrops: null, // null = automático según la estación
