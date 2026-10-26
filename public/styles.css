@@ -1,5 +1,5 @@
-/* DonGranjero · estética de granja pixelada: paneles con borde de madera,
-   íconos pixel-art propios y tipografía pixelada solo en títulos y números. */
+/* DonGranjero · estética de granja: paneles con borde de madera, íconos pixel-art propios,
+   letra redondeada para títulos y números, y letra pixelada solo en el logo. */
 
 :root {
   --bg: #e9f2da;
@@ -20,7 +20,9 @@
   --berry-soft: #f8dadc;
   --soil: #8a5a34;
   --soil-dark: #6a4024;
-  --display: "Pixelify Sans", "Trebuchet MS", system-ui, sans-serif;
+  /* Títulos y números: Fredoka (redondeada y muy legible). La letra pixelada queda solo en el logo. */
+  --display: "Fredoka", "Trebuchet MS", system-ui, sans-serif;
+  --pixel: "Pixelify Sans", "Fredoka", system-ui, sans-serif;
   --body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
   --nav-h: 66px;
   --head-h: 64px;
@@ -62,7 +64,9 @@ body {
     radial-gradient(var(--bg-2) 1.5px, transparent 1.6px) 0 0 / 22px 22px,
     var(--bg);
 }
-h1, h2, h3 { font-family: var(--display); line-height: 1.15; margin: 0; font-weight: 600; letter-spacing: .01em; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.15; margin: 0; font-weight: 600; letter-spacing: 0; }
+/* Números alineados y bien legibles en toda la app */
+.goal-proj strong, .money input, .kpis dd, .flower-price strong, .rank .val, .card-val, .hist-kpis dd, .cal-sum, .cal-day .dn, .cal-day .amt { font-variant-numeric: tabular-nums lining-nums; }
 h2 { font-size: 1.75rem; margin-bottom: .4rem; }
 h3 { font-size: 1.2rem; margin-bottom: .55rem; display: flex; align-items: center; gap: .45rem; }
 .mt { margin-top: 1.9rem; }
@@ -97,7 +101,7 @@ svg.px { image-rendering: pixelated; flex: none; display: inline-block; vertical
 }
 .brand { display: flex; align-items: center; gap: .6rem; min-width: 0; flex: 1 1 auto; }
 .brand > div { min-width: 0; }
-.brand h1 { font-size: 1.35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand h1 { font-family: var(--pixel); font-size: 1.35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .brand .sub { margin: 0; font-size: .8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .brand-mark { width: 38px; height: 38px; flex: none; display: grid; place-items: center; border-radius: 9px; background: var(--sun-soft); border: 2px solid var(--edge); }
 .top-actions { flex: none; display: flex; align-items: center; gap: .4rem; }
@@ -422,3 +426,5 @@ input[type="range"] { padding: 0; accent-color: var(--grass); border: 0; backgro
 @media (max-width: 480px) {
   .cal-day .wt { font-size: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--sun); border: 1px solid var(--edge); top: 4px; right: 4px; }
 }
+/* Montos chicos con la misma letra redondeada que los números grandes */
+.cal-day .amt, .price-pill, .flower-stats dd, .rank .usd { font-family: var(--display); font-weight: 600; }
