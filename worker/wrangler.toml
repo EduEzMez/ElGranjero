@@ -15,6 +15,7 @@ database_id = "8467dfee-6d91-4d8d-a389-2e14641a6deb"
 [vars]
 FARM_ID = "441"
 FARM_INTERVAL_MIN = "30"    # cada cuánto se consulta la granja (la API limita consultas)
+FARM_BACKOFF_MAX_MIN = "60" # espera máxima después de un 429 (antes llegaba a horas)
 MARKET_INTERVAL_MIN = "60"  # cada cuánto se guardan precios
 TIMEZONE = "America/Argentina/Buenos_Aires"
 QUIET_FROM = "1"            # no avisar entre la 1:00 ...
