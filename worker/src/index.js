@@ -66,6 +66,8 @@ export default {
     const meta = await readMeta(env.DB);
     const attempts = parseList(meta.farmAttempts);
     delete meta.farmAttempts;
+    delete meta.lastPools;
+    delete meta.priceAlertSent;
     const okGaps = attempts.filter((a) => a.ok && a.gapMin != null).map((a) => a.gapMin);
     const failGaps = attempts.filter((a) => !a.ok && a.status === 429 && a.gapMin != null).map((a) => a.gapMin);
     return Response.json({
@@ -150,7 +152,7 @@ async function run(env, { force = false } = {}) {
         await db.prepare("INSERT OR REPLACE INTO prices (taken_at, flower_usd, prices) VALUES (?, ?, ?)").bind(m.fetchedAt, m.flowerUsd, JSON.stringify(m.prices)).run();
         await db.prepare("DELETE FROM prices WHERE taken_at < ?").bind(new Date(now - 45 * 86400e3).toISOString()).run();
       }
-      await writeMeta(db, { lastMarketAt: m.fetchedAt });
+      await writeMeta(db, { lastMarketAt: m.fetchedAt, lastPools: JSON.stringify(m.pools || []) });
       log.marketSaved = true;
     } catch (err) {
       log.marketError = err.message;
