@@ -609,8 +609,15 @@ function renderCalendar() {
 
   const m = insights.metrics;
   const capacityUsdDay = t.usdPerFlower ? (m ? m.earnedPerDay * t.usdPerFlower : t.usdMonth != null ? t.usdMonth / 30 : null) : null;
+  // El historial guarda el precio promedio: se escala al precio que elegiste para valuar cada día.
+  const autoUsd = market?.flowerUsd;
+  const usedUsd = Number(state.flowerUsdOverride) > 0 ? Number(state.flowerUsdOverride) : marketView()?.flowerUsd;
+  const scaled =
+    history && autoUsd && usedUsd && usedUsd !== autoUsd
+      ? { ...history, flowerDaily: Object.fromEntries(Object.entries(history.flowerDaily || {}).map(([d, v]) => [d, (v * usedUsd) / autoUsd])) }
+      : history;
   const cal = monthCalendar({
-    history,
+    history: scaled,
     today,
     goalUsd: state.targetUsd,
     usdPerFlowerNow: t.usdPerFlower,
@@ -1324,13 +1331,16 @@ function renderPools() {
   const spread = prices.length > 1 ? Math.max(...prices) / Math.min(...prices) - 1 : 0;
   const opt = (value, title, sub, checked) =>
     `<label class="pool ${checked ? "on" : ""}"><input type="radio" name="flowerSource" value="${esc(value)}" ${checked ? "checked" : ""}><span><strong>${title}</strong><small>${sub}</small></span></label>`;
-  let html = opt("auto", `Promedio de pools · US$ ${fmt(market.flowerUsd, 4)}`, "Ponderado por liquidez, solo pools con liquidez real. Recomendado.", src === "auto" && !manual);
+  const how = market.flowerPair?.method === "volumen" ? "Ponderado por volumen de 24 h: pesan los pools donde se opera de verdad." : "Ponderado por liquidez (hay poco volumen hoy).";
+  let html = opt("auto", `Promedio de pools · US$ ${fmt(market.flowerUsd, 4)}`, `${how} Recomendado.`, src === "auto" && !manual);
   html += pools
     .map((p) =>
       opt(
         p.id,
         `${esc(p.dex)} ${esc(p.pair)} · US$ ${fmt(p.priceUsd, 4)}`,
-        `Liquidez US$ ${compact(p.liquidityUsd)} · volumen 24 h US$ ${compact(p.volume24hUsd)}${p.used ? "" : " · poca liquidez, no entra en el promedio"}`,
+        `Liquidez US$ ${compact(p.liquidityUsd)} · volumen 24 h US$ ${compact(p.volume24hUsd)}${
+          p.used ? (p.weightPct != null ? ` · pesa ${fmt(p.weightPct, 0)}% en el promedio` : "") : " · poca liquidez, no entra en el promedio"
+        }`,
         src === p.id && !manual
       )
     )
