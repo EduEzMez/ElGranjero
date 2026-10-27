@@ -25,7 +25,21 @@ export default {
       return Response.json({ ok });
     }
     const meta = await readMeta(env.DB);
-    return Response.json({ service: "dongranjero-cron", farmId: env.FARM_ID, ...meta });
+    const attempts = parseList(meta.farmAttempts);
+    delete meta.farmAttempts;
+    const okGaps = attempts.filter((a) => a.ok && a.gapMin != null).map((a) => a.gapMin);
+    const failGaps = attempts.filter((a) => !a.ok && a.status === 429 && a.gapMin != null).map((a) => a.gapMin);
+    return Response.json({
+      service: "dongranjero-cron",
+      farmId: env.FARM_ID,
+      ...meta,
+      apiPace: {
+        // Minutos desde la última consulta exitosa: con qué separación la API aceptó y con cuál rechazó.
+        okAfterMin: okGaps.length ? Math.min(...okGaps) : null,
+        rejectedUpToMin: failGaps.length ? Math.max(...failGaps) : null,
+        attempts: attempts.slice(-10),
+      },
+    });
   },
 };
 
@@ -42,6 +56,9 @@ async function run(env, { force = false } = {}) {
   if (now < blockedUntil) {
     log.farmSkipped = `Esperando por límite de la API hasta ${new Date(blockedUntil).toISOString()}`;
   } else if (force || !meta.lastFarmAt || now - Date.parse(meta.lastFarmAt) >= farmEvery) {
+    const attempts = parseList(meta.farmAttempts);
+    const lastOk = attempts.filter((a) => a.ok).at(-1);
+    const gapMin = lastOk ? Math.round((now - Date.parse(lastOk.at)) / 60e3) : null;
     try {
       const data = await fetchFarmUpstream(env, id);
       const farm = farmOf(data);
@@ -51,21 +68,33 @@ async function run(env, { force = false } = {}) {
       const timers = computeTimers(farm, env.TIMEZONE);
       await saveTimers(db, id, timers);
       log.timers = timers.length;
-      await writeMeta(db, { lastFarmAt: new Date().toISOString(), lastFarmError: "", farmStrikes: "0", farmBlockedUntil: "0" });
+      attempts.push({ at: new Date().toISOString(), ok: true, gapMin });
+      await writeMeta(db, {
+        lastFarmAt: new Date().toISOString(), lastFarmOkAt: new Date().toISOString(), lastFarmError: "",
+        farmStrikes: "0", farmBlockedUntil: "0", farmAttempts: JSON.stringify(attempts.slice(-20)),
+      });
     } catch (err) {
       log.farmError = err.message;
       const patch = { lastFarmAt: new Date().toISOString(), lastFarmError: err.message };
+      const entry = { at: new Date().toISOString(), ok: false, status: err.status || null, gapMin };
       if (err.status === 429) {
-        // Espera progresiva: 60, 120, 240 min... (máx. 12 h), o lo que pida la API en Retry-After.
+        // Si la API dice cuánto esperar (Retry-After), se respeta eso con un margen.
+        // Si no, espera escalonada corta: 15, 30 y después 60 min como máximo.
         const strikes = (Number(meta.farmStrikes) || 0) + 1;
-        const backoffMin = Math.min(720, (Number(env.FARM_BACKOFF_MIN) || 60) * 2 ** (strikes - 1));
-        const retryAfterMs = Number(err.retryAfter) > 0 ? Number(err.retryAfter) * 1000 : 0;
-        const wait = Math.max(backoffMin * 60e3, retryAfterMs);
+        const steps = [15, 30, 60];
+        const capMin = Number(env.FARM_BACKOFF_MAX_MIN) || 60;
+        const retryAfterS = Number(err.retryAfter) > 0 ? Number(err.retryAfter) : 0;
+        const wait = retryAfterS
+          ? Math.max(2 * 60e3, retryAfterS * 1000 + 30e3)
+          : Math.min(capMin, steps[Math.min(strikes, steps.length) - 1]) * 60e3;
+        entry.retryAfter = retryAfterS || null;
         patch.farmStrikes = String(strikes);
         patch.farmBlockedUntil = String(now + wait);
         patch.lastFarmError = `${err.message}. Próximo intento: ${new Date(now + wait).toISOString()}`;
         log.nextTry = new Date(now + wait).toISOString();
       }
+      attempts.push(entry);
+      patch.farmAttempts = JSON.stringify(attempts.slice(-20));
       await writeMeta(db, patch);
     }
   }
@@ -151,6 +180,15 @@ async function writeMeta(db, obj) {
       db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(k, String(v ?? ""))
     )
   );
+}
+
+function parseList(v) {
+  try {
+    const x = JSON.parse(v || "[]");
+    return Array.isArray(x) ? x : [];
+  } catch {
+    return [];
+  }
 }
 
 const escapeHtml = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
