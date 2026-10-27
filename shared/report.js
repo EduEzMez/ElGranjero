@@ -21,11 +21,12 @@ export async function loadContext(db, env) {
   const tz = env.TIMEZONE || "America/Argentina/Buenos_Aires";
   const now = Date.now();
 
-  const [farmRow, settingsRow, snaps, prices] = await Promise.all([
+  const [farmRow, settingsRow, snaps, prices, poolsRow] = await Promise.all([
     readLatestFarm(db, id),
     db.prepare("SELECT data FROM settings WHERE farm_id = ?").bind(id).first(),
     db.prepare("SELECT day, taken_at, coins, flower, activity FROM snapshots WHERE farm_id = ? ORDER BY day DESC LIMIT 40").bind(id).all(),
     db.prepare("SELECT taken_at, flower_usd, prices FROM prices WHERE taken_at >= ? ORDER BY taken_at").bind(new Date(now - 40 * 86400e3).toISOString()).all(),
+    db.prepare("SELECT value FROM meta WHERE key = 'lastPools'").first(),
   ]);
 
   const state = { ...structuredClone(DEFAULTS), ...(settingsRow ? safe(settingsRow.data) : {}) };
@@ -54,7 +55,22 @@ export async function loadContext(db, env) {
   for (const r of rows) if (r.usd) (perDay[dayIn(tz, new Date(r.t))] ||= []).push(r.usd);
   for (const [d, v] of Object.entries(perDay)) flowerDaily[d] = v.reduce((a, b) => a + b, 0) / v.length;
 
-  const market = latest ? { prices: latest.p, flowerUsd: latest.usd } : { prices: {}, flowerUsd: null };
+  // Precio de FLOWER: el mismo criterio que la web (manual > pool elegido > promedio).
+  const pools = (() => {
+    try {
+      return JSON.parse(poolsRow?.value || "[]");
+    } catch {
+      return [];
+    }
+  })();
+  const chosen = state.flowerSource && state.flowerSource !== "auto" ? pools.find((p) => p.id === state.flowerSource) : null;
+  const autoUsd = latest?.usd ?? null;
+  const flowerUsd = chosen ? chosen.priceUsd : autoUsd;
+  const market = latest ? { prices: latest.p, flowerUsd } : { prices: {}, flowerUsd: null };
+  const flowerSourceLabel = Number(state.flowerUsdOverride) > 0 ? "precio manual" : chosen ? `${chosen.dex} ${chosen.pair}` : "promedio de pools";
+  // El historial guarda el promedio: se escala al precio elegido para valuar cada día igual que la web.
+  const usedUsd = Number(state.flowerUsdOverride) > 0 ? Number(state.flowerUsdOverride) : flowerUsd;
+  if (autoUsd && usedUsd && usedUsd !== autoUsd) for (const d in flowerDaily) flowerDaily[d] *= usedUsd / autoUsd;
   const history = {
     days: (snaps.results || []).map((r) => ({ day: r.day, takenAt: r.taken_at, coins: r.coins, flower: r.flower, activity: safe(r.activity) })).reverse(),
     priceStats,
@@ -79,7 +95,7 @@ export async function loadContext(db, env) {
       })
     : null;
 
-  return { id, tz, now, state, detected, farm, farmFetchedAt: farmRow?.fetchedAt, market, history, rows, result, today, deliveries, inventory, metrics, calendar, monthEvents };
+  return { id, tz, now, state, detected, farm, farmFetchedAt: farmRow?.fetchedAt, market, flowerSourceLabel, history, rows, result, today, deliveries, inventory, metrics, calendar, monthEvents };
 }
 
 const hm = (ms, tz) => new Intl.DateTimeFormat("es-AR", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms));
@@ -146,7 +162,7 @@ export function textEstado(ctx) {
   const t = ctx.result.totals;
   const lines = [`🌻 <b>Estado de la granja #${ctx.id}</b>`];
   lines.push(`Datos de la granja: ${ctx.farmFetchedAt ? ago(ctx.farmFetchedAt) : "sin datos"}`);
-  lines.push(`FLOWER: ${t.flowerUsd ? `US$ ${fmt(t.flowerUsd, 4)}` : "sin precio"}`);
+  lines.push(`FLOWER: ${t.flowerUsd ? `US$ ${fmt(t.flowerUsd, 4)} (${ctx.flowerSourceLabel})` : "sin precio"}`);
   if (t.usdMonth != null) lines.push(`Proyección: US$ ${fmt(t.usdMonth, 2)}/mes (meta US$ ${fmt(ctx.state.targetUsd, 0)})`);
   if (ctx.metrics && t.usdPerFlower) lines.push(`Real (${fmt(ctx.metrics.span, 0)} días): ${fmt(ctx.metrics.earnedPerDay, 2)} FLOWER/día ≈ US$ ${fmt(ctx.metrics.earnedPerDay * 30 * t.usdPerFlower, 2)}/mes`);
   const top = ctx.result.streams.find((s) => s.netFlowerDay > 0);

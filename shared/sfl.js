@@ -97,11 +97,16 @@ export async function fetchMarket(env) {
       });
     }
     pools.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
+    // Se pondera por VOLUMEN de 24 h: un pool con mucha liquidez pero sin operaciones
+    // tiene un precio desactualizado y no debe arrastrar el promedio.
     const real = pools.filter((x) => x.liquidityUsd >= minLiq);
     const use = real.length ? real : pools.slice(0, 1);
-    const wSum = use.reduce((a, x) => a + (x.liquidityUsd || 1), 0);
+    const volSum = use.reduce((a, x) => a + x.volume24hUsd, 0);
+    const byVolume = volSum >= (Number(env.MIN_TOTAL_VOLUME_USD) || 100);
+    const weight = (x) => (byVolume ? x.volume24hUsd : x.liquidityUsd || 1);
+    const wSum = use.reduce((a, x) => a + weight(x), 0);
     if (use.length) {
-      flowerUsd = use.reduce((a, x) => a + x.priceUsd * (x.liquidityUsd || 1), 0) / wSum;
+      flowerUsd = use.reduce((a, x) => a + x.priceUsd * weight(x), 0) / wSum;
       const top = use[0];
       flowerPair = {
         dex: top.dex,
@@ -110,10 +115,10 @@ export async function fetchMarket(env) {
         liquidityUsd: use.reduce((a, x) => a + x.liquidityUsd, 0),
         volume24hUsd: use.reduce((a, x) => a + x.volume24hUsd, 0),
         change24h: top.change24h,
-        method: use.length > 1 ? "promedio" : "pool",
+        method: use.length > 1 ? (byVolume ? "volumen" : "liquidez") : "pool",
       };
     } else errors.push({ source: "flower", message: "No se encontró un pool con precio para FLOWER." });
-    pools = pools.slice(0, 8).map((x) => ({ ...x, used: x.liquidityUsd >= minLiq }));
+    pools = pools.slice(0, 8).map((x) => ({ ...x, used: x.liquidityUsd >= minLiq, weightPct: x.liquidityUsd >= minLiq && wSum > 0 ? (weight(x) / wSum) * 100 : 0 }));
   } else errors.push({ source: "flower", message: String(dexRes.reason?.message || dexRes.reason) });
 
   let ars = null;
