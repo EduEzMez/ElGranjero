@@ -11,6 +11,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Fredoka:wght@500;600;700&family=Pixelify+Sans:wght@600&display=swap" rel="stylesheet">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="DonGranjero">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -150,6 +154,22 @@
         <h2 id="t-historial">Lo que pasó de verdad</h2>
         <p class="hint" id="histHint"></p>
         <div id="histBody"></div>
+
+        <h3 class="mt"><span data-icon="coin" data-size="22"></span>Retiros a pesos</h3>
+        <p class="hint">Anotá cada vez que pasás FLOWER a pesos. Así sabés cuánto cobraste de verdad, a qué precio, y tenés el registro ordenado.</p>
+        <form class="card-form" id="wdForm" autocomplete="off">
+          <div class="grid3">
+            <label class="field"><span>Fecha</span><input name="date" type="date" required></label>
+            <label class="field"><span>FLOWER retirados</span><input name="flower" type="number" min="0" step="any" required></label>
+            <label class="field"><span>Pesos recibidos</span><input name="ars" type="number" min="0" step="any" required></label>
+            <label class="field"><span>Dólares recibidos (opcional)</span><input name="usd" type="number" min="0" step="any"></label>
+            <label class="field"><span>Nota (opcional)</span><input name="note" maxlength="80" placeholder="Ej: vía USDC en Base"></label>
+          </div>
+          <button class="btn" type="submit">Guardar retiro</button>
+        </form>
+        <div id="wdSummary"></div>
+        <div class="table-wrap"><table class="tbl" id="wdList"></table></div>
+        <div class="row-actions"><button class="btn ghost small" type="button" id="wdExport">Exportar CSV</button></div>
       </section>
 
       <!-- INVERSION -->
@@ -189,6 +209,18 @@
         <h3 class="mt">Cantidades</h3>
         <p class="hint">Detectadas desde la API. Si algo no coincide con lo que ves en el juego, corregilo acá.</p>
         <div class="grid3" id="countsGrid"></div>
+
+        <h3 class="mt"><span data-icon="Wheat" data-size="22"></span>Calibrar rendimiento</h3>
+        <p class="hint">Después de cosechar, anotá cuántas parcelas, nodos o animales cosechaste y cuántas unidades recibiste. La app usa ese rendimiento real en lugar de la tabla de boosts.</p>
+        <form class="card-form" id="calibForm" autocomplete="off">
+          <div class="grid3">
+            <label class="field"><span>Recurso</span><select name="item" id="calibItem"></select></label>
+            <label class="field"><span>Cosechaste (parcelas, nodos o animales)</span><input name="count" type="number" min="1" step="1" required placeholder="Ej: 68"></label>
+            <label class="field"><span>Unidades recibidas</span><input name="units" type="number" min="0" step="any" required placeholder="Ej: 190"></label>
+          </div>
+          <button class="btn" type="submit">Guardar medición</button>
+        </form>
+        <ul class="boosts" id="calibList"></ul>
 
         <h3 class="mt">Tiempos reales de tu granja</h3>
         <p class="hint">El juego guarda en cada parcela y nodo cuánto tiempo te descuentan tus boosts. Estos son los ciclos que usa el cálculo.</p>
@@ -248,6 +280,7 @@
         <div class="pools" id="poolList"></div>
         <label class="check"><input type="checkbox" id="marketFeeAuto"> <span id="marketFeeAutoLabel">Usar la comisión real de mis ventas</span></label>
         <label class="check"><input type="checkbox" id="useObservedTimes"> <span>Usar los tiempos reales que guarda el juego</span></label>
+        <label class="check"><input type="checkbox" id="applyRealFactor"> <span>Ajustar la proyección con lo que gano de verdad (necesita 3 días de historial)</span></label>
         <label class="check"><input type="checkbox" id="rapidRoot"> <span>Uso Rapid Root en los cultivos (−50% de tiempo; su costo no se descuenta)</span></label>
 
         <h3 class="mt">Cultivos habilitados</h3>
@@ -259,7 +292,24 @@
         <p class="hint">Precio piso en FLOWER por unidad. Escribí un valor para fijarlo a mano. En liquidez, cuántas unidades por día creés que el mercado absorbe sin bajar el precio.</p>
         <div class="table-wrap"><table class="tbl prices" id="priceTbl"></table></div>
 
-        <h3 class="mt"><span data-icon="bell" data-size="22"></span>Historial y avisos por Telegram</h3>
+        <h3 class="mt"><span data-icon="gear" data-size="22"></span>Sincronización</h3>
+        <p class="hint">Con la clave, tus ajustes se guardan en el servidor: los ves igual en el celular y en la compu, y el bot de Telegram usa tu meta y tus anotaciones. La clave es la misma que cargaste como SYNC_KEY en Cloudflare Pages.</p>
+        <form class="farm-id" id="syncForm" autocomplete="off">
+          <label class="field inline"><span>Clave de sincronización</span><input id="syncKey" type="password" autocomplete="off"></label>
+          <button class="btn" type="submit">Guardar clave</button>
+        </form>
+        <p class="hint" id="syncStatus"></p>
+
+        <h3 class="mt"><span data-icon="bell" data-size="22"></span>Telegram</h3>
+        <label class="check"><input type="checkbox" id="weeklySummary"> <span>Resumen semanal los domingos a la noche</span></label>
+        <label class="check"><input type="checkbox" id="priceAlerts"> <span>Alertas de precio</span></label>
+        <div class="grid2">
+          <label class="field"><span>Avisar si un recurso que tengo sube (% sobre su promedio de 7 días)</span><input id="priceAlertPct" type="number" min="1" max="100" step="1"></label>
+          <label class="field"><span>Avisar si FLOWER se mueve en 24 h (%)</span><input id="flowerAlertPct" type="number" min="1" max="100" step="1"></label>
+        </div>
+        <p class="hint">Las alertas y el resumen usan los ajustes sincronizados: activá la sincronización para que el bot los vea.</p>
+
+        <h3 class="mt"><span data-icon="hourglass" data-size="22"></span>Historial y avisos</h3>
         <p class="hint" id="cronStatus">Se activan al desplegar el Worker programado. Los pasos están en el README.</p>
 
         <h3 class="mt">Datos sin conexión</h3>

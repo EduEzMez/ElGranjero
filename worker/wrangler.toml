@@ -20,6 +20,7 @@ MARKET_INTERVAL_MIN = "60"  # cada cuánto se guardan precios
 TIMEZONE = "America/Argentina/Buenos_Aires"
 QUIET_FROM = "1"            # no avisar entre la 1:00 ...
 QUIET_TO = "7"              # ... y las 7:00 (vacío para desactivar)
+WEEKLY_HOUR = "21"          # domingo a esta hora llega el resumen semanal
 SITE_URL = "https://elgranjero.pages.dev/"  # tu web en Pages, para el link del aviso
 
 # Secretos (no van acá):

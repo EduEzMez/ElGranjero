@@ -307,6 +307,11 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
 
   const streams = [];
   const missingPrices = new Set();
+  // Rendimiento medido por el usuario (unidades por parcela/nodo/animal y cosecha). Manda sobre la tabla.
+  const measuredYield = (name) => {
+    const v = Number(state.measuredYields?.[name]?.perNode);
+    return v > 0 ? v : null;
+  };
   const useReal = state.useObservedTimes !== false && detected;
   const rapidRoot = state.rapidRoot ?? detected?.rapidRoot ?? false;
   // Devuelve { timeMult, source } usando, en orden: tiempo observado del recurso, multiplicador general observado, tabla de boosts.
@@ -333,11 +338,12 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
       continue;
     }
     const m = modsFor(c.name, "crops", boosts);
-    const yld = (1 + m.yieldAdd) * (1 + m.yieldPct / 100);
+    const yld = measuredYield(c.name) ?? (1 + m.yieldAdd) * (1 + m.yieldPct / 100);
     const tm = timeFor(c.name, "crops", boosts);
     cropOptions.push({
       name: c.name,
       timeSource: tm.source,
+      yieldSource: measuredYield(c.name) != null ? "medido" : "tabla",
       cycleMin: c.hours * 60 * tm.timeMult * (rapidRoot ? 0.5 : 1),
       yield: yld,
       price: p,
@@ -385,6 +391,7 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
         cycleMin: o.cycleMin,
         applied: o.applied,
         timeSource: o.timeSource,
+        yieldSource: o.yieldSource,
         seedsDay: h * plots,
         harvestsDay: h * plots,
         detail: `${fmt(h, 2)} cosechas por parcela al día`,
@@ -403,7 +410,7 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
       continue;
     }
     const m = modsFor(fr.name, "fruits", boosts);
-    const yld = (1 + m.yieldAdd) * (1 + m.yieldPct / 100);
+    const yld = measuredYield(fr.name) ?? (1 + m.yieldAdd) * (1 + m.yieldPct / 100);
     const tm = timeFor(fr.name, "fruits", boosts);
     const cycleMin = fr.hours * 60 * tm.timeMult;
     const h = harvestsPerDay(cycleMin, tl);
@@ -422,6 +429,7 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
       cycleMin,
       applied: m.applied,
       timeSource: tm.source,
+      yieldSource: measuredYield(fr.name) != null ? "medido" : "tabla",
       harvestsDay: h * patches,
       detail: `${fmt(h, 2)} cosechas por parche al día`,
     });
@@ -440,8 +448,10 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
     }
     const m = modsFor(nd.name, "nodes", boosts);
     let yld = ((nd.baseYield || 1) + m.yieldAdd) * (1 + m.yieldPct / 100);
+    const measuredNode = measuredYield(nd.name);
     // Árboles antiguos: cada uno cuenta como varios árboles comunes.
     if (nd.name === "Wood" && detected?.treeUnits && state.countOverrides?.Wood == null) yld *= detected.treeUnits / k;
+    if (measuredNode != null) yld = measuredNode; // lo medido ya incluye boosts y árboles antiguos
     const tm = timeFor(nd.name, "nodes", boosts);
     const cycleMin = nd.hours * 60 * tm.timeMult;
     const h = harvestsPerDay(cycleMin, tl);
@@ -467,6 +477,7 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
       cycleMin,
       applied: m.applied,
       timeSource: tm.source,
+      yieldSource: measuredNode != null ? "medido" : "tabla",
       harvestsDay: h * k,
       detail: `${nd.tool.name} por golpe`,
       unknownMats,
@@ -486,7 +497,8 @@ export function compute({ state, detected, market, extraBoosts = [], sessionsOve
     const m = modsFor(an.name, "animals", boosts);
     const cycleH = (useReal && detected.animalCycle?.[an.name]) || 24;
     const perDayFactor = 24 / cycleH; // ciclos por día
-    const units = k * perDayFactor * (Number(cfgA.perDay) * (1 + m.yieldPct / 100) + m.yieldAdd);
+    const measuredAnimal = measuredYield(an.name);
+    const units = k * perDayFactor * (measuredAnimal ?? Number(cfgA.perDay) * (1 + m.yieldPct / 100) + m.yieldAdd);
     const fp = price(cfgA.feedItem);
     const feedCost = fp === null ? 0 : k * perDayFactor * Number(cfgA.feedQty) * fp;
     streams.push({

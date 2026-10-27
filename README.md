@@ -91,6 +91,28 @@ En `worker/wrangler.toml` podés cambiar el ID de granja, cada cuánto consulta,
 
 El historial necesita al menos dos días de fotos para mostrar el ingreso real y el ritmo de cosecha.
 
+## Sincronización, alertas y comandos del bot
+
+### 1. Tabla de ajustes
+
+En la consola de D1 ejecutá:
+
+```sql
+CREATE TABLE IF NOT EXISTS settings (farm_id INTEGER PRIMARY KEY, updated_at TEXT NOT NULL, data TEXT NOT NULL);
+```
+
+### 2. Clave de sincronización
+
+En Cloudflare → proyecto de Pages `elgranjero` → Configuración → Variables y secretos, agregá un **Secreto** `SYNC_KEY` con una clave larga que inventes. Redeployá. Después cargá esa misma clave en la web, en Ajustes → Sincronización.
+
+### 3. Comandos del bot
+
+Abrí una vez `https://dongranjero-cron.TU-SUBDOMINIO.workers.dev/telegram/setup?key=TU_RUN_KEY`. Desde ahí el bot responde `/hoy`, `/vender`, `/isla`, `/estado` y `/semana`, solo a tu chat.
+
+### 4. Instalar en el celular
+
+Abrí la web en Chrome (Android) → menú → "Instalar aplicación", o en Safari (iPhone) → Compartir → "Agregar a inicio".
+
 ## Desarrollo local
 
 ```bash

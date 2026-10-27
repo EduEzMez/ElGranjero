@@ -6,6 +6,7 @@ import { analyzeDeliveries, analyzeInventory, reservedByDeliveries, upcomingEven
 const LS_STATE = "dongranjero:state:v1";
 const LS_FARM = "dongranjero:farm:v1";
 const LS_MARKET = "dongranjero:market:v1";
+const LS_SYNC = "dongranjero:sync:v1"; // la clave de sincronización queda solo en este dispositivo
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -47,8 +48,58 @@ function loadState() {
   const saved = readLS(LS_STATE) || {};
   return { ...clone(DEFAULTS), ...saved };
 }
+let syncTimer;
+let syncStatus = "";
 function saveState() {
+  state._updatedAt = new Date().toISOString();
   writeLS(LS_STATE, state);
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(pushSettings, 1500);
+}
+
+const syncKey = () => readLS(LS_SYNC)?.key || "";
+
+async function pushSettings() {
+  const key = syncKey();
+  if (!key) return;
+  try {
+    const res = await fetch(`/api/settings?farm=${encodeURIComponent(state.farmId)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-sync-key": key },
+      body: JSON.stringify({ updatedAt: state._updatedAt, data: state }),
+    });
+    const body = await res.json().catch(() => ({}));
+    syncStatus = res.ok ? `Sincronizado a las ${new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}` : `No se pudo sincronizar: ${body.error || res.status}`;
+  } catch (err) {
+    syncStatus = `No se pudo sincronizar: ${err.message}`;
+  }
+  const el = $("#syncStatus");
+  if (el) el.textContent = syncStatus;
+}
+
+// Al abrir: si la copia del servidor es más nueva, se usa esa (así el celular y la compu coinciden).
+async function pullSettings() {
+  const key = syncKey();
+  if (!key) return false;
+  try {
+    const res = await fetch(`/api/settings?farm=${encodeURIComponent(state.farmId)}`, { headers: { "x-sync-key": key } });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      syncStatus = `No se pudo sincronizar: ${body.error || res.status}`;
+      return false;
+    }
+    if (body.data && (!state._updatedAt || body.updatedAt > state._updatedAt)) {
+      state = { ...clone(DEFAULTS), ...body.data };
+      writeLS(LS_STATE, state);
+      syncStatus = "Ajustes traídos del servidor.";
+      return true;
+    }
+    if (!body.data) pushSettings();
+    syncStatus = "Sincronización activa.";
+  } catch (err) {
+    syncStatus = `No se pudo sincronizar: ${err.message}`;
+  }
+  return false;
 }
 function readLS(k) {
   try {
@@ -149,6 +200,7 @@ async function refreshAll(force = false) {
   const btn = $("#refreshBtn");
   btn.classList.add("spin");
   btn.disabled = true;
+  await pullSettings();
   await Promise.all([loadFarm(state.farmId, { force }), loadMarket(), loadHistory()]);
   btn.classList.remove("spin");
   btn.disabled = false;
@@ -172,6 +224,7 @@ function marketView() {
 function recompute(animate = false) {
   result = compute({ state, detected, market: marketView() });
   buildInsights();
+  applyRealFactor();
   renderHeader();
   renderStatus();
   renderGoal(animate);
@@ -185,8 +238,27 @@ function recompute(animate = false) {
   renderSettings();
   renderEvents();
   renderCalendar();
+  renderCalibration();
+  renderWithdrawals();
   renderSell();
   renderHistory();
+}
+
+// Compara lo proyectado con lo ganado de verdad ("SFL Earned") y, si se activa, ajusta la proyección.
+function applyRealFactor() {
+  const t = result.totals;
+  const m = insights.metrics;
+  t.planFlowerDay = t.netFlowerDay;
+  t.planUsdMonth = t.usdMonth;
+  t.realFactor = null;
+  if (!m || m.span < 3 || !(t.netFlowerDay > 0)) return;
+  const raw = m.earnedPerDay / t.netFlowerDay;
+  t.realRatio = raw;
+  if (state.applyRealFactor === false) return;
+  const f = Math.min(2, Math.max(0.25, raw));
+  t.realFactor = f;
+  t.netFlowerDay *= f;
+  if (t.usdMonth != null) t.usdMonth *= f;
 }
 
 function buildInsights() {
@@ -219,7 +291,7 @@ function renderHeader() {
   const t = result.totals;
   $("#flowerPrice").textContent = t.flowerUsd ? `US$ ${fmt(t.flowerUsd, 4)}` : "sin precio";
   const who = detected?.username ? ` · ${detected.username}` : "";
-  const when = farmPayload?.fetchedAt ? ` · ${new Date(farmPayload.fetchedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}` : "";
+  const when = farmPayload?.fetchedAt ? ` · ${new Date(farmPayload.fetchedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short", hourCycle: "h23" })}` : "";
   $("#farmLine").textContent = `Granja #${state.farmId}${who}${when}`;
 }
 
@@ -274,9 +346,10 @@ function renderGoal(animate) {
   }
 
   const note = $("#goalNote");
+  const adj = t.realFactor ? ` Proyección ajustada a tu ritmo real (×${fmt(t.realFactor, 2)}).` : "";
   if (t.usdMonth === null) note.textContent = "Falta el precio de FLOWER para convertir a dólares. Cargalo a mano en Ajustes si la API no responde.";
-  else if (ratio >= 1) note.textContent = `Cubrís el ${Math.round(ratio * 100)}% de la meta. Te sobran US$ ${fmt(t.usdMonth - state.targetUsd, 2)} por mes.`;
-  else note.textContent = `Cubrís el ${Math.round(ratio * 100)}% de la meta. Faltan US$ ${fmt(state.targetUsd - t.usdMonth, 2)} por mes.`;
+  else if (ratio >= 1) note.textContent = `Cubrís el ${Math.round(ratio * 100)}% de la meta. Te sobran US$ ${fmt(t.usdMonth - state.targetUsd, 2)} por mes.${adj}`;
+  else note.textContent = `Cubrís el ${Math.round(ratio * 100)}% de la meta. Faltan US$ ${fmt(state.targetUsd - t.usdMonth, 2)} por mes.${adj}`;
 
   $("#kFlowerDay").textContent = fmt(t.netFlowerDay, 2);
   $("#kNeeded").textContent = t.neededFlowerDay === null ? "–" : fmt(t.neededFlowerDay, 2);
@@ -378,7 +451,7 @@ function renderAdvice() {
     const realUsd = m.earnedPerDay * 30 * t.usdPerFlower;
     add(
       `En los últimos ${fmt(m.span, 0)} días ganaste <strong>${fmt(m.earnedPerDay, 2)} FLOWER por día</strong> (≈ US$ ${fmt(realUsd, 2)}/mes) según los contadores del juego.${
-        t.usdMonth ? ` El plan proyecta US$ ${fmt(t.usdMonth, 2)}/mes: ${realUsd >= t.usdMonth * 0.9 ? "vas en línea" : "hay margen para mejorar el ritmo"}.` : ""
+        t.planUsdMonth ? ` El plan (sin ajustar) proyecta US$ ${fmt(t.planUsdMonth, 2)}/mes: ${realUsd >= t.planUsdMonth * 0.9 ? "vas en línea" : "estás por debajo: revisá el ritmo de cosecha en Historial o calibrá los rendimientos en Granja"}.` : ""
       }`,
       realUsd >= state.targetUsd ? "" : "warn",
       "hourglass"
@@ -466,6 +539,7 @@ function renderRanking() {
     ? list
         .map((s) => {
           const flags = [];
+          if (s.yieldSource === "medido") flags.push(`<span class="flag real">rendimiento medido</span>`);
           if (s.timeSource === "real") flags.push(`<span class="flag real">tiempo real</span>`);
           if (s.timeSource === "real-general") flags.push(`<span class="flag real">tiempo real estimado</span>`);
           if (s.applied?.length) flags.push(...s.applied.map((b) => `<span class="flag boost">${esc(b)}</span>`));
@@ -840,6 +914,20 @@ function renderHistory() {
   let html = "";
   if (m) {
     const usdM = (f) => (t.usdPerFlower ? `US$ ${fmt(f * 30 * t.usdPerFlower, 2)}/mes` : "–");
+    if (t.realRatio != null) {
+      const pct = Math.round(t.realRatio * 100);
+      html += `<div class="reality ${pct >= 90 ? "ok" : "low"}">
+        <h3>${icon("trophy", { size: 22 })}Proyección vs realidad</h3>
+        <p>El plan calcula <strong>${fmt(t.planFlowerDay, 2)} FLOWER/día</strong> y en los últimos ${fmt(m.span, 0)} días ganaste <strong>${fmt(m.earnedPerDay, 2)}</strong>: estás al <strong>${pct}%</strong> de lo proyectado.</p>
+        <p class="hint">${
+          pct >= 110
+            ? "Ganás más de lo que proyecta el plan: probablemente sumás entregas, pesca u otras fuentes que el plan no incluye."
+            : pct >= 90
+              ? "El plan describe bien tu granja."
+              : "Ganás menos de lo proyectado. Puede ser ritmo de cosecha (mirá la tabla de abajo), rendimientos de la tabla inflados (calibralos en Granja) o recursos que producís pero no vendés."
+        } ${t.realFactor ? `La meta y el calendario ya usan tu ritmo real (×${fmt(t.realFactor, 2)}).` : "Podés activar el ajuste automático en Ajustes."}</p>
+      </div>`;
+    }
     html += `<dl class="hist-kpis">
       <div><dt>FLOWER ganado por día</dt><dd>${fmt(m.earnedPerDay, 2)}</dd></div>
       <div><dt>Equivale a</dt><dd>${usdM(m.earnedPerDay)}</dd></div>
@@ -893,7 +981,7 @@ function renderHistory() {
         .slice(0, 20)
         .map(
           (s) =>
-            `<tr><td>${new Date(s.at).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}</td><td>${esc(
+            `<tr><td>${new Date(s.at).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short", hourCycle: "h23" })}</td><td>${esc(
               Object.entries(s.items).map(([k, v]) => `${v} ${label(k)}`).join(", ")
             )}</td><td>${fmt(s.flower - s.tax, 4)}</td></tr>`
         )
@@ -908,7 +996,7 @@ function renderHistory() {
   const tm = (history.timers || []).filter((x) => !x.notified).slice(0, 8);
   if (tm.length) {
     html += `<h3 class="mt">Próximos avisos</h3><ul class="events">${tm
-      .map((x) => `<li>${icon("bell", { size: 22 })}<time>${new Date(x.readyAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}</time><div>${esc(x.label)}</div></li>`)
+      .map((x) => `<li>${icon("bell", { size: 22 })}<time>${new Date(x.readyAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}</time><div>${esc(x.label)}</div></li>`)
       .join("")}</ul>`;
   }
 
@@ -1094,6 +1182,73 @@ function renderFarm() {
     : `<tbody><tr><td>Cargá la granja para ver los tiempos.</td></tr></tbody>`;
 }
 
+/* ---------- Calibración de rendimientos ---------- */
+
+function renderCalibration() {
+  const sel = $("#calibItem");
+  if (sel && !sel.options.length) {
+    const groups = [["Cultivos", CROPS], ["Frutas", FRUITS], ["Minería y madera", NODES], ["Animales", ANIMALS]];
+    sel.innerHTML = groups
+      .map(([g, list]) => `<optgroup label="${g}">${list.map((x) => `<option value="${x.name}">${esc(label(x.name))}</option>`).join("")}</optgroup>`)
+      .join("");
+  }
+  const my = state.measuredYields || {};
+  const names = Object.keys(my);
+  $("#calibList").innerHTML = names.length
+    ? names
+        .map((n) => {
+          const v = my[n];
+          const s = result.streams.find((x) => x.name === n) || result.singleCrop.find((x) => x.name === n);
+          return `<li><div style="display:flex;gap:.5rem;align-items:center">${ic(n, 24)}<div><strong>${esc(label(n))}: ${fmt(v.perNode, 2)} por cosecha</strong><small>${v.samples.length} medición(es) · ${fmt(v.samples.reduce((a, x) => a + x.count, 0), 0)} cosechas anotadas${s ? "" : " · sin precio o sin nodos en tu granja"}</small></div></div>
+            <button class="btn ghost small" type="button" data-del-yield="${esc(n)}">Borrar</button></li>`;
+        })
+        .join("")
+    : `<li class="empty">Todavía no anotaste cosechas. Con dos o tres de lo que más producís, la proyección pasa a usar tu rendimiento real.</li>`;
+}
+
+/* ---------- Retiros a pesos ---------- */
+
+function renderWithdrawals() {
+  const list = state.withdrawals || [];
+  const year = String(new Date().getFullYear());
+  const thisYear = list.filter((w) => w.date.startsWith(year));
+  const sum = (arr, k) => arr.reduce((a, w) => a + (Number(w[k]) || 0), 0);
+  const fl = sum(thisYear, "flower");
+  const ars = sum(thisYear, "ars");
+  const usd = sum(thisYear.filter((w) => w.usd > 0), "usd");
+  const flUsd = sum(thisYear.filter((w) => w.usd > 0), "flower");
+  $("#wdSummary").innerHTML = thisYear.length
+    ? `<dl class="hist-kpis">
+        <div><dt>FLOWER retirado (${year})</dt><dd>${fmt(fl, 2)}</dd></div>
+        <div><dt>Pesos cobrados</dt><dd>$ ${fmt(ars, 0)}</dd></div>
+        <div><dt>Pesos por FLOWER</dt><dd>$ ${fl > 0 ? fmt(ars / fl, 2) : "–"}</dd></div>
+        <div><dt>Dólares por FLOWER</dt><dd>${flUsd > 0 ? `US$ ${fmt(usd / flUsd, 4)}` : "–"}</dd></div>
+      </dl>${flUsd > 0 ? `<button class="btn ghost small" type="button" id="useRealPrice">Usar US$ ${fmt(usd / flUsd, 4)} como precio de FLOWER</button>` : ""}`
+    : "";
+  $("#wdList").innerHTML = list.length
+    ? `<thead><tr><th>Fecha</th><th>FLOWER</th><th>Pesos</th><th>US$</th><th>$/FLOWER</th><th></th></tr></thead><tbody>${[...list]
+        .sort((x, y) => y.date.localeCompare(x.date))
+        .map(
+          (w) =>
+            `<tr><td>${esc(w.date)}</td><td>${fmt(w.flower, 2)}</td><td>${fmt(w.ars, 0)}</td><td>${w.usd ? fmt(w.usd, 2) : "–"}</td><td>${w.flower ? fmt(w.ars / w.flower, 2) : "–"}</td>
+            <td><button class="btn ghost small" type="button" data-del-wd="${esc(w.id)}">Borrar</button></td></tr>`
+        )
+        .join("")}</tbody>`
+    : `<tbody><tr><td>Todavía no anotaste retiros.</td></tr></tbody>`;
+}
+
+function exportWithdrawalsCsv() {
+  const rows = [["fecha", "flower", "pesos", "dolares", "pesos_por_flower", "nota"]].concat(
+    (state.withdrawals || []).map((w) => [w.date, w.flower, w.ars, w.usd || "", w.flower ? (w.ars / w.flower).toFixed(2) : "", (w.note || "").replace(/[\n;]/g, " ")])
+  );
+  const csv = rows.map((r) => r.join(";")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv" }));
+  a.download = `retiros-flower-${state.farmId}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 /* ---------- Ajustes ---------- */
 
 const ALL_PRICED = [...CROPS, ...FRUITS, ...NODES, ...ANIMALS].map((x) => x.name).concat(["Leather"]);
@@ -1117,6 +1272,14 @@ function renderSettings() {
       ? `Usar la comisión real de mis ventas (${fmt(detected.marketFee, 1)}%) en vez del valor de arriba`
       : "Usar la comisión real de mis ventas (todavía no hay ventas detectadas)";
   $("#useObservedTimes").checked = state.useObservedTimes !== false;
+  $("#applyRealFactor").checked = state.applyRealFactor !== false;
+  $("#weeklySummary").checked = state.weeklySummary !== false;
+  $("#priceAlerts").checked = state.priceAlerts !== false;
+  setVal("#priceAlertPct", state.priceAlertPct);
+  setVal("#flowerAlertPct", state.flowerAlertPct);
+  const sk = $("#syncKey");
+  if (document.activeElement !== sk) sk.value = syncKey();
+  $("#syncStatus").textContent = syncStatus || (syncKey() ? "" : "Sin clave: los ajustes quedan solo en este navegador y el bot usa valores por defecto.");
   renderPools();
   const cron = history?.cron;
   $("#cronStatus").textContent = cron?.lastRunAt
@@ -1317,7 +1480,7 @@ function bind() {
   numBind("#flowerUsdOverride", "flowerUsdOverride", { allowEmpty: true });
   numBind("#coinToFlower", "coinToFlower");
 
-  for (const id of ["marketFeeAuto", "useObservedTimes", "rapidRoot"]) {
+  for (const id of ["marketFeeAuto", "useObservedTimes", "rapidRoot", "applyRealFactor", "weeklySummary", "priceAlerts"]) {
     $(`#${id}`).addEventListener("change", (e) => {
       state[id] = e.target.checked;
       saveState();
@@ -1331,6 +1494,84 @@ function bind() {
     state.flowerUsdOverride = null;
     saveState();
     recompute();
+  });
+
+  numBind("#priceAlertPct", "priceAlertPct", { min: 1, max: 100 });
+  numBind("#flowerAlertPct", "flowerAlertPct", { min: 1, max: 100 });
+
+  $("#syncForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const key = $("#syncKey").value.trim();
+    writeLS(LS_SYNC, key ? { key } : null);
+    syncStatus = key ? "Probando la clave…" : "Sincronización desactivada.";
+    $("#syncStatus").textContent = syncStatus;
+    if (key) {
+      const changed = await pullSettings();
+      if (!changed && /activa/.test(syncStatus)) await pushSettings();
+      recompute();
+    }
+  });
+
+  $("#calibForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const item = String(fd.get("item"));
+    const count = Number(fd.get("count"));
+    const units = Number(fd.get("units"));
+    if (!(count > 0) || !(units > 0)) return;
+    const prev = state.measuredYields?.[item]?.samples || [];
+    const samples = [...prev, { count, units, at: new Date().toISOString() }].slice(-5);
+    const perNode = samples.reduce((a, x) => a + x.units, 0) / samples.reduce((a, x) => a + x.count, 0);
+    state.measuredYields = { ...(state.measuredYields || {}), [item]: { perNode, samples } };
+    e.target.reset();
+    saveState();
+    recompute();
+  });
+  $("#calibList").addEventListener("click", (e) => {
+    const n = e.target.closest("[data-del-yield]")?.dataset.delYield;
+    if (!n) return;
+    const next = { ...(state.measuredYields || {}) };
+    delete next[n];
+    state.measuredYields = next;
+    saveState();
+    recompute();
+  });
+
+  $("#wdForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const w = {
+      id: Math.random().toString(36).slice(2, 10),
+      date: String(fd.get("date")),
+      flower: Number(fd.get("flower")) || 0,
+      ars: Number(fd.get("ars")) || 0,
+      usd: Number(fd.get("usd")) || 0,
+      note: String(fd.get("note") || ""),
+    };
+    if (!w.date || !(w.flower > 0)) return;
+    state.withdrawals = [...(state.withdrawals || []), w];
+    e.target.reset();
+    $("#wdForm [name=date]").value = todayIn(detected?.timezone);
+    saveState();
+    recompute();
+  });
+  $("#view-historial").addEventListener("click", (e) => {
+    const id = e.target.closest("[data-del-wd]")?.dataset.delWd;
+    if (id) {
+      state.withdrawals = (state.withdrawals || []).filter((w) => w.id !== id);
+      saveState();
+      recompute();
+    }
+    if (e.target.id === "useRealPrice") {
+      const list = (state.withdrawals || []).filter((w) => w.usd > 0);
+      const p = list.reduce((a, w) => a + w.usd, 0) / list.reduce((a, w) => a + w.flower, 0);
+      if (p > 0) {
+        state.flowerUsdOverride = Number(p.toFixed(6));
+        saveState();
+        recompute();
+      }
+    }
+    if (e.target.id === "wdExport") exportWithdrawalsCsv();
   });
 
   $("#cropToggles").addEventListener("click", (e) => {
@@ -1409,7 +1650,12 @@ function bind() {
 
 /* ---------- Inicio ---------- */
 
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+}
+
 paintStaticIcons();
 bind();
+$("#wdForm [name=date]").value = todayIn();
 recompute(true);
 refreshAll();

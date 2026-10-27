@@ -7,6 +7,10 @@
 import {
   fetchFarmUpstream, farmOf, writeLatestFarm, fetchMarket, saveSnapshot, saveSales, computeTimers, saveTimers,
 } from "../../shared/sfl.js";
+import { loadContext, textHoy, textVender, textIsla, textEstado, textSemana, HELP, priceAlerts } from "../../shared/report.js";
+
+// El secret del webhook de Telegram solo admite letras, números, _ y -.
+const webhookSecret = (env) => String(env.RUN_KEY || "").replace(/[^A-Za-z0-9_-]/g, "_");
 
 export default {
   async scheduled(_event, env, ctx) {
@@ -20,6 +24,41 @@ export default {
     const url = new URL(request.url);
     const authorized = env.RUN_KEY && url.searchParams.get("key") === env.RUN_KEY;
     if (url.pathname === "/run" && authorized) return Response.json(await run(env, { force: true }));
+    // Comandos del bot: Telegram llama acá cada vez que le escribís.
+    if (url.pathname === "/telegram" && request.method === "POST") {
+      if (request.headers.get("x-telegram-bot-api-secret-token") !== webhookSecret(env)) return new Response("forbidden", { status: 403 });
+      const update = await request.json().catch(() => ({}));
+      const msg = update.message || update.edited_message;
+      if (!msg || String(msg.chat?.id) !== String(env.TELEGRAM_CHAT_ID)) return new Response("ok");
+      const cmd = String(msg.text || "").trim().split(/[\s@]/)[0].toLowerCase();
+      let text = HELP;
+      if (["/hoy", "/vender", "/isla", "/estado", "/semana"].includes(cmd)) {
+        try {
+          const ctx = await loadContext(env.DB, env);
+          text = { "/hoy": textHoy, "/vender": textVender, "/isla": textIsla, "/estado": textEstado, "/semana": textSemana }[cmd](ctx);
+        } catch (err) {
+          text = `No pude armar la respuesta: ${err.message}`;
+        }
+      }
+      await sendTelegram(env, text);
+      return new Response("ok");
+    }
+    // Configura el webhook y el menú de comandos del bot (una sola vez).
+    if (url.pathname === "/telegram/setup" && authorized) {
+      const api = (m, body) =>
+        fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${m}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+      const hook = await api("setWebhook", { url: `${url.origin}/telegram`, secret_token: webhookSecret(env), allowed_updates: ["message"] });
+      const cmds = await api("setMyCommands", {
+        commands: [
+          { command: "hoy", description: "Meta del día y qué hacer" },
+          { command: "vender", description: "Qué conviene vender" },
+          { command: "isla", description: "Próximas aperturas de la isla flotante" },
+          { command: "estado", description: "Resumen de la granja" },
+          { command: "semana", description: "Resumen de los últimos 7 días" },
+        ],
+      });
+      return Response.json({ webhook: hook, commands: cmds });
+    }
     if (url.pathname === "/test" && authorized) {
       const ok = await sendTelegram(env, "🌻 DonGranjero: los avisos están funcionando.");
       return Response.json({ ok });
@@ -109,12 +148,33 @@ async function run(env, { force = false } = {}) {
         await db.prepare("DELETE FROM prices WHERE taken_at < ?").bind(new Date(now - 45 * 86400e3).toISOString()).run();
       }
       await writeMeta(db, { lastMarketAt: m.fetchedAt });
+      log.marketSaved = true;
     } catch (err) {
       log.marketError = err.message;
     }
   }
 
-  // 3. Avisos
+  // 3. Alertas de precio (después de guardar precios) y resumen semanal
+  const hasTelegram = env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID;
+  const weeklyDue = isWeeklyTime(env, meta);
+  if (hasTelegram && (log.marketSaved || weeklyDue)) {
+    try {
+      const ctx = await loadContext(db, env);
+      if (log.marketSaved && !inQuietHours(env)) {
+        const { messages, sent } = priceAlerts(ctx, parseObj(meta.priceAlertSent));
+        if (messages.length && (await sendTelegram(env, messages.join("\n\n")))) await writeMeta(db, { priceAlertSent: JSON.stringify(sent) });
+        log.priceAlerts = messages.length;
+      }
+      if (weeklyDue && ctx.state.weeklySummary !== false) {
+        if (await sendTelegram(env, textSemana(ctx))) await writeMeta(db, { lastWeeklyDay: weeklyDue });
+        log.weekly = true;
+      }
+    } catch (err) {
+      log.reportError = err.message;
+    }
+  }
+
+  // 4. Avisos de cosecha e isla
   log.notified = await notifyReady(env, id);
   await writeMeta(db, { lastRunAt: log.at });
   return log;
@@ -151,6 +211,17 @@ async function notifyReady(env, id) {
   return ok ? toSend.length : 0;
 }
 
+// Domingo a la hora WEEKLY_HOUR (21 por defecto), una vez por semana. Devuelve la fecha si toca mandarlo.
+function isWeeklyTime(env, meta) {
+  const tz = env.TIMEZONE || "UTC";
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "numeric", hourCycle: "h23" }).formatToParts(new Date()).map((p) => [p.type, p.value])
+  );
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const hour = Number(env.WEEKLY_HOUR || 21);
+  return parts.weekday === "Sun" && Number(parts.hour) === hour && meta.lastWeeklyDay !== day ? day : null;
+}
+
 function inQuietHours(env) {
   if (env.QUIET_FROM === "" || env.QUIET_TO === "" || env.QUIET_FROM == null || env.QUIET_TO == null) return false;
   const from = Number(env.QUIET_FROM);
@@ -180,6 +251,15 @@ async function writeMeta(db, obj) {
       db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(k, String(v ?? ""))
     )
   );
+}
+
+function parseObj(v) {
+  try {
+    const x = JSON.parse(v || "{}");
+    return x && typeof x === "object" && !Array.isArray(x) ? x : {};
+  } catch {
+    return {};
+  }
 }
 
 function parseList(v) {

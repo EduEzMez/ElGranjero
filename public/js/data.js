@@ -140,5 +140,13 @@ export const DEFAULTS = {
   animalCfg: {},
   liquidity: {}, // unidades/día que estimás que el mercado absorbe sin tirar el precio
   excluded: [],
+  measuredYields: {}, // rendimiento anotado por el usuario: { Corn: { perNode, samples: [{count, units, at}] } }
+  applyRealFactor: true, // ajustar la proyección con lo ganado de verdad
+  withdrawals: [], // retiros a pesos: { id, date, flower, ars, usd, note }
+  weeklySummary: true, // resumen semanal por Telegram
+  priceAlerts: true, // alertas de precio por Telegram
+  priceAlertPct: 15, // % sobre el promedio de 7 días para avisar
+  flowerAlertPct: 10, // % de variación de FLOWER en 24 h para avisar
+  alertMinFlower: 2, // solo avisar si lo que tenés vale al menos esto
   dayWeights: {}, // marcas del calendario: { "2026-10-27": 0 | 1 | 1.5 } (se borran al cambiar de mes)
 };

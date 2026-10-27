@@ -46,5 +46,12 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT
 );
 
+-- Ajustes de la web (meta, comisiones, anotaciones) para que el Worker y otros dispositivos los vean.
+CREATE TABLE IF NOT EXISTS settings (
+  farm_id INTEGER PRIMARY KEY,
+  updated_at TEXT NOT NULL,
+  data TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_sales_farm ON sales (farm_id, fulfilled_at);
 CREATE INDEX IF NOT EXISTS idx_timers_ready ON timers (farm_id, notified, ready_at);
