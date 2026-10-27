@@ -91,7 +91,10 @@ async function run(env, { force = false } = {}) {
 
   // 1. Granja (respeta la espera después de un 429, incluso con /run)
   const farmEvery = (Number(env.FARM_INTERVAL_MIN) || 30) * 60e3;
-  const blockedUntil = Number(meta.farmBlockedUntil) || 0;
+  // Si quedó un bloqueo más largo que el tope (por ejemplo, de una versión anterior), se recorta.
+  const capMs = (Number(env.FARM_BACKOFF_MAX_MIN) || 60) * 60e3;
+  const lastTry = Date.parse(meta.lastFarmAt) || 0;
+  const blockedUntil = Math.min(Number(meta.farmBlockedUntil) || 0, lastTry + capMs + 60e3);
   if (now < blockedUntil) {
     log.farmSkipped = `Esperando por límite de la API hasta ${new Date(blockedUntil).toISOString()}`;
   } else if (force || !meta.lastFarmAt || now - Date.parse(meta.lastFarmAt) >= farmEvery) {
