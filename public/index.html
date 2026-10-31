@@ -66,9 +66,19 @@
               <span class="money"><span aria-hidden="true">US$</span><input id="targetUsd" type="number" inputmode="decimal" min="1" step="1" aria-label="Meta mensual en dólares"></span>
             </label>
           </div>
-          <div class="plotmeter" id="plotMeter" role="img" aria-label="Avance del mes"></div>
           <p class="goal-note" id="goalNote"></p>
           <p class="hint" id="mSub"></p>
+        </div>
+
+        <!-- Calendario estilo Sunflower Land: estación, eventos y tu meta en cada día -->
+        <div class="gcal" id="gcalCard">
+          <div class="gcal-head">
+            <strong id="gcalToday">–</strong>
+            <span id="gcalSeason"></span>
+          </div>
+          <div class="gcal-grid" id="gcalGrid" role="grid" aria-label="Calendario de cuatro semanas"></div>
+          <div class="gcal-legend" id="gcalLegend"></div>
+          <div class="gcal-detail" id="gcalDetail" aria-live="polite"></div>
         </div>
 
         <!-- 2. Hoy / esta semana: meta, avance y qué hacer -->
@@ -100,20 +110,6 @@
           <ul class="advice" id="advice"></ul>
         </div>
 
-        <details class="cal-wrap" id="calWrap">
-          <summary><span data-icon="calendar" data-size="22"></span><span>Planificar el mes <small>Marcá días libres o fuertes y mirá el detalle de cada día</small></span></summary>
-        <div class="cal" id="calCard" aria-labelledby="t-cal">
-          <div class="cal-head">
-            <h3 id="t-cal"><span data-icon="calendar" data-size="22"></span><span id="calTitle">Calendario</span></h3>
-            <span class="cal-sum" id="calSum"></span>
-          </div>
-          <p class="hint" id="calHint"></p>
-          <div class="cal-grid" id="calGrid" role="grid" aria-label="Días del mes"></div>
-          <div class="cal-legend" id="calLegend"></div>
-          <div class="cal-detail" id="calDetail" aria-live="polite"></div>
-        </div>
-
-        </details>
 
         <div class="flower" id="flowerCard" aria-labelledby="t-flower">
           <div class="flower-head">

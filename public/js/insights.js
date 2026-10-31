@@ -364,3 +364,58 @@ export function dailySeries({ history, today, goalUsd, usdPerFlowerNow, cashout,
   }
   return out.slice(-days);
 }
+
+/* ---------- Calendario estilo Sunflower Land ---------- */
+
+const SEASONS = ["spring", "summer", "autumn", "winter"];
+
+// La estación cambia cada lunes (00:00 UTC) en este orden: primavera → verano → otoño → invierno.
+export function seasonOf(farm, isoDay) {
+  const cur = farm?.season?.season;
+  const started = Number(farm?.season?.startedAt);
+  const idx = SEASONS.indexOf(cur);
+  if (idx < 0 || !started) return null;
+  const [y, m, d] = isoDay.split("-").map(Number);
+  const weeks = Math.floor((Date.UTC(y, m - 1, d, 12) - started) / (7 * 86400e3));
+  return SEASONS[(((idx + weeks) % 4) + 4) % 4];
+}
+
+// Íconos y explicación de cada evento, y el item del juego que protege de cada clima.
+export const GAME_EVENTS = {
+  doubleDelivery: { icon: "basket", title: "Entregas dobles", note: "Las entregas pagan el doble: guardá ingredientes para este día." },
+  bountifulHarvest: { icon: "Wheat", title: "Cosecha abundante", note: "La cosecha rinde más este día." },
+  sunshower: { icon: "sunrain", title: "Lluvia de sol", note: "Los cultivos crecen más rápido." },
+  fullMoon: { icon: "moon", title: "Luna llena", note: "Evento de temporada." },
+  tsunami: { icon: "wave", title: "Tsunami", note: "Clima adverso.", protection: "Mangrove" },
+  tornado: { icon: "tornado", title: "Tornado", note: "Clima adverso.", protection: "Tornado Pinwheel" },
+  greatFreeze: { icon: "snow", title: "Gran helada", note: "Clima adverso.", protection: "Thermal Stone" },
+  insectPlague: { icon: "bug", title: "Plaga de insectos", note: "Clima adverso.", protection: "Protective Pesticide" },
+  unknown: { icon: "bolt", title: "Clima sin revelar", note: "Habrá un evento de clima: el juego lo anuncia ese mismo día." },
+};
+export const SEASON_ICON = { spring: "leafSpring", summer: "sun", autumn: "leafAutumn", winter: "snow" };
+
+// Cuatro semanas desde el lunes de la semana actual, como el calendario del juego.
+export function gameCalendarDays(farm, today, weeks = 4) {
+  const [y, m, d] = today.split("-").map(Number);
+  const base = new Date(Date.UTC(y, m - 1, d, 12));
+  const monday = new Date(base);
+  monday.setUTCDate(base.getUTCDate() - ((base.getUTCDay() + 6) % 7));
+  const byDate = {};
+  for (const e of farm?.calendar?.dates || []) (byDate[e.date] ||= []).push(e.name);
+  const out = [];
+  for (let i = 0; i < weeks * 7; i++) {
+    const dt = new Date(monday);
+    dt.setUTCDate(monday.getUTCDate() + i);
+    const iso = dt.toISOString().slice(0, 10);
+    out.push({
+      date: iso,
+      n: dt.getUTCDate(),
+      weekday: (dt.getUTCDay() + 6) % 7,
+      season: seasonOf(farm, iso),
+      events: (byDate[iso] || []).filter((n) => GAME_EVENTS[n] || n),
+      past: iso < today,
+      today: iso === today,
+    });
+  }
+  return out;
+}

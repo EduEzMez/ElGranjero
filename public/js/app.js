@@ -1,7 +1,7 @@
 import { CROPS, FRUITS, NODES, ANIMALS, BOOSTS, DEFAULTS, LABELS, CATEGORY_LABEL, SEASON_CROPS, SEASON_LABEL } from "./data.js";
 import { compute, detectFarm, fmt } from "./engine.js";
 import { icon } from "./icons.js";
-import { analyzeDeliveries, analyzeInventory, reservedByDeliveries, upcomingEvents, coinBounties, historyMetrics, monthCalendar, coverWithInventory, dailySeries } from "./insights.js";
+import { analyzeDeliveries, analyzeInventory, reservedByDeliveries, upcomingEvents, coinBounties, historyMetrics, monthCalendar, coverWithInventory, dailySeries, gameCalendarDays, seasonOf, GAME_EVENTS, SEASON_ICON } from "./insights.js";
 
 const LS_STATE = "dongranjero:state:v1";
 const LS_FARM = "dongranjero:farm:v1";
@@ -241,7 +241,7 @@ function recompute(animate = false) {
   renderFarm();
   renderSettings();
   renderEvents();
-  renderCalendar();
+  renderGameCal();
   renderCalibration();
   renderWithdrawals();
   renderSell();
@@ -341,12 +341,10 @@ function renderMonthHero(animate) {
   const input = $("#targetUsd");
   if (document.activeElement !== input) input.value = state.targetUsd;
   const cal = insights.calendar;
-  const meter = $("#plotMeter");
   if (!cal) {
     $("#mMonth").textContent = "Este mes";
     $("#mEarned").textContent = "–";
     $("#mOf").textContent = "";
-    meter.innerHTML = Array.from({ length: 20 }, () => `<span class="plot"></span>`).join("");
     $("#goalNote").textContent = "Falta el precio de FLOWER para pasar lo ganado a dólares. Cargalo a mano en Ajustes si no aparece.";
     $("#mSub").textContent = "";
     return;
@@ -359,23 +357,6 @@ function renderMonthHero(animate) {
   $("#mEarned").textContent = usdTxt(earned);
   $("#mOf").textContent = `ganados de ${usdTxt(goal)} (${Math.round(ratio * 100)}%)`;
 
-  // Parcelas: girasol = ya ganado; brote apagado = lo que sumarías a tu ritmo hasta fin de mes.
-  const cells = 20;
-  const filled = Math.min(cells, ratio * cells);
-  const forecastCells = cal.forecast != null && goal > 0 ? Math.min(cells, (cal.forecast / goal) * cells) : filled;
-  meter.innerHTML = Array.from({ length: cells }, (_, i) => {
-    if (i + 1 <= filled) return `<span class="plot fill" style="--i:${i}">${icon("Sunflower", { size: 40 })}</span>`;
-    if (i < filled) return `<span class="plot part">${icon("sprout", { size: 40 })}</span>`;
-    if (i < forecastCells) return `<span class="plot ghost">${icon("sprout", { size: 40 })}</span>`;
-    return `<span class="plot"></span>`;
-  }).join("");
-  meter.setAttribute("aria-label", `Ganaste ${Math.round(ratio * 100)}% de la meta del mes`);
-  if (animate) {
-    meter.classList.remove("grow");
-    void meter.offsetWidth;
-    meter.classList.add("grow");
-  }
-
   const note = $("#goalNote");
   if (earned >= goal) note.innerHTML = `<strong>¡Meta del mes cumplida!</strong> Lo que sumes de acá a fin de mes es extra.`;
   else if (lastDay) note.innerHTML = `Hoy cierra ${MONTHS[cal.month - 1]}. Te faltan <strong>${usdTxt(goal - earned)}</strong>; mañana arranca un mes nuevo desde cero.`;
@@ -386,7 +367,7 @@ function renderMonthHero(animate) {
         : `A tu ritmo terminás el mes en <strong>${usdTxt(cal.forecast)}</strong>: te faltarían <strong>${usdTxt(goal - cal.forecast)}</strong>.`;
   else note.textContent = `Te faltan ${usdTxt(goal - earned)} para la meta del mes.`;
 
-  const sub = [`<span class="legend">${icon("Sunflower", { size: 16 })}ganado</span><span class="legend">${icon("sprout", { size: 16 })}lo que sumarías a tu ritmo</span>`];
+  const sub = [];
   if (cal.prorated) sub.push(`<span class="subnote">Este mes cuenta desde el día ${cal.startN}, el primero con datos: por eso la meta es ${usdTxt(goal)} y no ${usdTxt(state.targetUsd)}.</span>`);
   if (cal.shortfall > 0.005) sub.push(`<span class="subnote">${usdTxt(cal.shortfall)} ya no se recuperan este mes sin pedirte más del doble por día.</span>`);
   $("#mSub").innerHTML = sub.join("");
@@ -792,7 +773,7 @@ function buildCalendar() {
   const monthKey = today.slice(0, 7);
   // Reinicio mensual: se borran las marcas de días de meses anteriores.
   const w = state.dayWeights || {};
-  const kept = Object.fromEntries(Object.entries(w).filter(([d]) => d.startsWith(monthKey)));
+  const kept = Object.fromEntries(Object.entries(w).filter(([d]) => d >= `${monthKey}-01`));
   if (Object.keys(kept).length !== Object.keys(w).length) {
     state.dayWeights = kept;
     saveState();
@@ -822,87 +803,136 @@ function buildCalendar() {
   insights.series = dailySeries({ history: scaled, today, goalUsd: state.targetUsd, usdPerFlowerNow: t.usdPerFlower, cashout: (state.cashoutFee || 0) / 100, days: 14 });
 }
 
-function renderCalendar() {
-  const t = result.totals;
+// Calendario como el del juego: 4 semanas desde el lunes, estación en la esquina, evento en el centro
+// y tu meta abajo (ganado en días pasados, avance de hoy, meta en los que vienen).
+function renderGameCal() {
+  const farm = detected?.raw;
   const today = insights.today;
+  const grid = $("#gcalGrid");
   if (!today) return;
-  const monthKey = today.slice(0, 7);
-
   const cal = insights.calendar;
-  if (!cal) return;
-  const m = insights.metrics;
-  if (!selectedDay || !selectedDay.startsWith(monthKey)) selectedDay = today;
+  const t = result.totals;
+  const tz = detected?.timezone || "America/Argentina/Buenos_Aires";
+  const days = gameCalendarDays(farm, today);
+  const seasonNow = seasonOf(farm, today);
+  const wd = new Intl.DateTimeFormat("es-AR", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }).format(new Date(today + "T12:00:00Z"));
+  $("#gcalToday").textContent = wd.replace(".", "");
+  $("#gcalSeason").innerHTML = seasonNow ? `${icon(SEASON_ICON[seasonNow], { size: 20 })}${esc(SEASON_LABEL[seasonNow])}` : "";
 
-  $("#calTitle").textContent = `${MONTHS[cal.month - 1]} ${cal.year}`;
-  const progress = cal.earnedPast + cal.earnedToday;
-  $("#calSum").textContent = `US$ ${fmt(progress, 2)} / ${fmt(cal.goal, 2)}`;
+  const series = Object.fromEntries((insights.series || []).map((x) => [x.day, x]));
+  const monthKey = today.slice(0, 7);
+  if (!selectedDay || !days.some((d) => d.date === selectedDay)) selectedDay = today;
 
-  const hints = [];
-  if (!history) hints.push("El calendario usa el historial del Worker. Mientras no haya datos, muestra lo que tenés que hacer desde hoy.");
-  if (cal.prorated) hints.push(`La meta de este mes se prorratea desde el día ${cal.startN}, el primero con datos.`);
-  if (cal.forecast != null) {
-    hints.push(
-      cal.forecast >= cal.goal
-        ? `Con tu ritmo ${m ? "real" : "proyectado"} cerrarías el mes en US$ ${fmt(cal.forecast, 2)}: llegás.`
-        : `Con tu ritmo ${m ? "real" : "proyectado"} cerrarías el mes en US$ ${fmt(cal.forecast, 2)}: te faltarían US$ ${fmt(cal.goal - cal.forecast, 2)}.`
-    );
-  }
-  hints.push("Tocá un día para ver el detalle o marcarlo como libre o fuerte.");
-  $("#calHint").textContent = hints.join(" ");
-
-  // Grilla (semana empieza el lunes)
-  const firstWd = (new Date(cal.year, cal.month - 1, 1).getDay() + 6) % 7;
-  let html = WEEKDAYS.map((d) => `<div class="cal-wd" role="columnheader">${d}</div>`).join("");
-  html += Array.from({ length: firstWd }, () => `<div></div>`).join("");
-  for (const d of cal.days) {
-    const cls = [d.status];
-    if (d.weight === 0 && (d.status === "future" || d.status === "today")) cls.push("off");
-    if (d.demanding) cls.push("demanding");
-    let ico = "";
-    let amt = "";
-    let extra = "";
-    if (d.status === "done") { ico = icon("Sunflower", { size: 24 }); amt = fmt(d.earnedUsd, 2); }
-    else if (d.status === "partial") { ico = icon("sprout", { size: 24 }); amt = fmt(d.earnedUsd, 2); }
-    else if (d.status === "missed") { ico = icon("wilted", { size: 24 }); amt = fmt(d.earnedUsd, 2); }
-    else if (d.status === "today-done") { ico = icon("Sunflower", { size: 24 }); amt = "¡Cumplido!"; }
-    else if (d.status === "today") {
-      ico = d.weight === 0 ? "" : icon("sprout", { size: 24 });
-      amt = d.weight === 0 ? "libre" : fmt(d.targetUsd, 2);
-      extra = d.weight === 0 ? "" : `<span class="prog"><i style="width:${Math.min(100, Math.round((d.ratio || 0) * 100))}%"></i></span>`;
-    } else if (d.status === "future") {
-      ico = d.events.some((e) => e.name === "doubleDelivery") ? icon("sack", { size: 20 }) : "";
-      amt = d.weight === 0 ? "libre" : fmt(d.targetUsd, 2);
-    }
-    const wt = d.weight === 1.5 && (d.status === "future" || d.status === "today") ? `<span class="wt">×1,5</span>` : "";
-    const label = `${d.n} de ${MONTHS[cal.month - 1]}: ${amt ? (amt === "libre" ? "libre" : `US$ ${amt}`) : "sin datos"}`;
-    html += `<button type="button" class="cal-day ${cls.join(" ")}" data-day="${d.date}" role="gridcell" aria-selected="${d.date === selectedDay}" aria-label="${esc(label)}" ${d.status === "nodata" ? "disabled" : ""}>
-      <span class="dn">${d.n}</span>${wt}${ico}<span class="amt">${esc(amt)}</span>${extra}</button>`;
-  }
-  $("#calGrid").innerHTML = html;
-
-  $("#calLegend").innerHTML = [
-    [icon("Sunflower", { size: 16 }), "Meta cumplida"],
-    [icon("sprout", { size: 16 }), "Más de la mitad"],
-    [icon("wilted", { size: 16 }), "No alcanzado"],
-    [icon("sack", { size: 16 }), "Entregas dobles"],
-    ["", "Montos en US$: lo ganado en días pasados y la meta en los que vienen"],
-  ]
-    .map(([i, l]) => `<span>${i}${l}</span>`)
+  const headers = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"].map((d) => `<div class="gcal-wd" role="columnheader">${d}</div>`).join("");
+  const cells = days
+    .map((d) => {
+      const inMonth = d.date.startsWith(monthKey);
+      const cd = inMonth && cal ? cal.days.find((x) => x.date === d.date) : null;
+      const s = series[d.date];
+      let status = "";
+      let amt = "";
+      let amtPre = ""; // en hoy: lo ganado antes de la meta (se oculta en pantallas chicas)
+      let extra = "";
+      if (d.past) {
+        const st = cd?.status && ["done", "partial", "missed"].includes(cd.status) ? cd.status : s?.status;
+        const usd = cd?.earnedUsd ?? s?.usd;
+        if (st && usd != null) {
+          status = st;
+          amt = fmt(usd, 2);
+        } else status = "nodata";
+      } else if (d.today) {
+        status = cd?.status === "today-done" ? "today done" : "today";
+        if (cd) {
+          amt = cd.weight === 0 ? "libre" : fmt(cd.targetUsd || 0, 2);
+          amtPre = cd.weight === 0 ? "" : `${fmt(cd.earnedUsd || 0, 2)}/`;
+          extra = cd.weight === 0 ? "" : `<span class="gprog"><i style="width:${Math.min(100, Math.round((cd.ratio || 0) * 100))}%"></i></span>`;
+        }
+      } else {
+        const weight = d.date in (state.dayWeights || {}) ? state.dayWeights[d.date] : d.events.includes("doubleDelivery") ? 1.5 : 1;
+        status = weight === 0 ? "future off" : "future";
+        if (cd) amt = cd.weight === 0 ? "libre" : fmt(cd.targetUsd, 2);
+        else if (t.usdPerFlower) {
+          // Mes siguiente: arranca de cero con la meta diaria normal.
+          const [yy, mm] = d.date.split("-").map(Number);
+          amt = weight === 0 ? "libre" : fmt((state.targetUsd / new Date(yy, mm, 0).getDate()) * weight, 2);
+        }
+        if (weight === 1.5) extra = `<span class="gstrong" title="Día fuerte">×1,5</span>`;
+      }
+      const ev = d.events.slice(0, 2).map((n) => icon(GAME_EVENTS[n]?.icon || "bell", { size: 26 })).join("");
+      const doneMark = status === "done" || status === "today done" ? `<span class="gmark">${icon("Sunflower", { size: 14 })}</span>` : status === "missed" ? `<span class="gmark">${icon("wilted", { size: 14 })}</span>` : "";
+      const sIco = d.season ? `<span class="gseason">${icon(SEASON_ICON[d.season], { size: 16 })}</span>` : "";
+      const evNames = d.events.map((n) => GAME_EVENTS[n]?.title || n).join(", ");
+      const aria = `${d.n}${evNames ? `, ${evNames}` : ""}${amt ? `, US$ ${amt}` : ""}`;
+      return `<button type="button" class="gday ${status} ${d.n === 1 ? "first" : ""}" data-gday="${d.date}" role="gridcell" aria-selected="${d.date === selectedDay}" aria-label="${esc(aria)}">
+        <span class="gn">${d.n}${d.n === 1 ? `<span class="gmon"> ${MONTHS[Number(d.date.slice(5, 7)) - 1].slice(0, 3)}</span>` : ""}</span>${sIco}${doneMark}
+        <span class="gev">${ev}</span>${extra}<span class="gamt">${amtPre ? `<span class="gpre">${esc(amtPre)}</span>` : ""}${esc(amt)}</span></button>`;
+    })
     .join("");
+  grid.innerHTML = headers + cells;
 
-  renderDayDetail(cal);
+  $("#gcalLegend").innerHTML = [
+    ["basket", "Entregas dobles"],
+    ["bolt", "Clima sin revelar"],
+    ["wave", "Tsunami"],
+    ["tornado", "Tornado"],
+    ["Sunflower", "Meta cumplida"],
+    ["wilted", "No alcanzada"],
+  ]
+    .map(([i, l]) => `<span>${icon(i, { size: 16 })}${l}</span>`)
+    .join("") + `<span class="muted">Montos en US$: lo ganado en días pasados, avance/meta hoy y la meta de los días que vienen.</span>`;
+
+  renderGameDetail(days.find((d) => d.date === selectedDay), cal);
+}
+
+// Detalle del día elegido: estación, eventos (con tu protección si aplica) y la meta.
+function renderGameDetail(d, cal) {
+  const el = $("#gcalDetail");
+  if (!d) {
+    el.innerHTML = "";
+    return;
+  }
+  const farm = detected?.raw;
+  const inMonth = cal && d.date.startsWith(cal.year + "-" + String(cal.month).padStart(2, "0"));
+  if (inMonth) renderDayDetail(cal);
+  else {
+    const weight = d.date in (state.dayWeights || {}) ? state.dayWeights[d.date] : d.events.includes("doubleDelivery") ? 1.5 : 1;
+    const [yy, mm] = d.date.split("-").map(Number);
+    const base = state.targetUsd / new Date(yy, mm, 0).getDate();
+    const s = (insights.series || []).find((x) => x.day === d.date);
+    let body;
+    if (d.past) body = s ? `<p>Ganaste <strong>US$ ${fmt(s.usd, 2)}</strong> contra una meta diaria de US$ ${fmt(s.baseline, 2)}.</p>` : `<p>Sin registro de ese día.</p>`;
+    else
+      body = `<p>${MONTHS[mm - 1][0].toUpperCase() + MONTHS[mm - 1].slice(1)} arranca de cero: la meta diaria normal es <strong>US$ ${fmt(base, 2)}</strong>${weight !== 1 ? `, y este día ${weight === 0 ? "está libre" : `vale ×1,5 (US$ ${fmt(base * 1.5, 2)})`}` : ""}.</p>
+        <div class="seg" role="group" aria-label="Tipo de día">${[[1, "Normal"], [1.5, "Fuerte ×1,5"], [0, "Libre"]]
+          .map(([v, l]) => `<button type="button" data-weight="${v}" class="${weight === v ? "on" : ""}">${l}</button>`)
+          .join("")}</div>`;
+    el.innerHTML = `<h4>${icon("calendar", { size: 20 })}${d.n} de ${MONTHS[mm - 1]}</h4>${body}`;
+  }
+  // Estación y eventos del juego, arriba del detalle.
+  const parts = [];
+  if (d.season) parts.push(`<li>${icon(SEASON_ICON[d.season], { size: 18 })}Estación: <strong>${esc(SEASON_LABEL[d.season])}</strong></li>`);
+  for (const n of d.events) {
+    const g = GAME_EVENTS[n] || { icon: "bell", title: n, note: "" };
+    let prot = "";
+    if (g.protection) {
+      const has = detected?.placed?.has(g.protection);
+      prot = has ? ` Tenés colocado <strong>${esc(g.protection)}</strong>, la protección del juego para este clima.` : ` La protección del juego es <strong>${esc(g.protection)}</strong> y no la detecté colocada.`;
+    }
+    parts.push(`<li>${icon(g.icon, { size: 18 })}<span><strong>${esc(g.title)}</strong>: ${esc(g.note)}${prot}</span></li>`);
+  }
+  if (parts.length) el.insertAdjacentHTML("afterbegin", `<ul class="gday-info">${parts.join("")}</ul>`);
 }
 
 function renderDayDetail(cal) {
   const t = result.totals;
   const d = cal.days.find((x) => x.date === selectedDay);
-  const el = $("#calDetail");
+  const el = $("#gcalDetail");
   if (!d) {
     el.innerHTML = "";
     return;
   }
   const title = `${d.n} de ${MONTHS[cal.month - 1]}`;
-  const evs = d.events.map((e) => `<li>${icon(e.name === "doubleDelivery" ? "sack" : "bell", { size: 18 })}${esc(e.title)}: ${esc(e.note)}</li>`).join("");
+  const evs = ""; // los eventos ya se muestran arriba del detalle, con su ícono y protección
   const segment = () => `<div class="seg" role="group" aria-label="Tipo de día">
       ${[[1, "Normal"], [1.5, "Fuerte ×1,5"], [0, "Libre"]]
         .map(([v, l]) => `<button type="button" data-weight="${v}" class="${d.weight === v ? "on" : ""}">${l}</button>`)
@@ -1588,19 +1618,18 @@ function bind() {
     if (go) $(`.tabs button[data-tab="${go}"]`)?.click();
   });
 
-  $("#calGrid").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-day]");
-    if (!b || b.disabled) return;
-    selectedDay = b.dataset.day;
-    renderCalendar();
+  $("#gcalGrid").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-gday]");
+    if (!b) return;
+    selectedDay = b.dataset.gday;
+    renderGameCal();
   });
-  $("#calDetail").addEventListener("click", (e) => {
+  $("#gcalDetail").addEventListener("click", (e) => {
     const b = e.target.closest("[data-weight]");
     if (!b || !selectedDay) return;
-    const v = Number(b.dataset.weight);
-    state.dayWeights = { ...(state.dayWeights || {}), [selectedDay]: v };
+    state.dayWeights = { ...(state.dayWeights || {}), [selectedDay]: Number(b.dataset.weight) };
     saveState();
-    renderCalendar();
+    recompute();
   });
 
   $("#refreshBtn").addEventListener("click", () => refreshAll(true));
