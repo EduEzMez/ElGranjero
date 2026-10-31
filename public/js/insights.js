@@ -209,7 +209,7 @@ const isoDay = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
 // - Días pasados: lo ganado (contador "SFL Earned") contra una vara fija = meta ÷ días con datos.
 // - Hoy y días futuros: lo que falta se reparte según el peso de cada día (libre 0, normal 1, fuerte 1,5).
 // - Los días anteriores al primer registro no cuentan: la meta se prorratea desde ahí.
-export function monthCalendar({ history, today, goalUsd, usdPerFlowerNow, cashout, weights = {}, events = [], capacityUsdDay = null }) {
+export function monthCalendar({ history, today, goalUsd, usdPerFlowerNow, cashout, weights = {}, events = [], capacityUsdDay = null, maxDayMultiplier = 2 }) {
   const [y, m] = today.split("-").map(Number);
   const daysInMonth = new Date(y, m, 0).getDate();
   const todayN = Number(today.slice(8, 10));
@@ -270,10 +270,31 @@ export function monthCalendar({ history, today, goalUsd, usdPerFlowerNow, cashou
   // Reparto de lo que falta entre hoy y los días que vienen.
   const remaining = Math.max(0, goal - earnedPast);
   const ahead = days.filter((d) => d.status === "today" || d.status === "future");
-  const wSum = ahead.reduce((a, d) => a + d.weight, 0);
+  // Reparto con tope: ningún día puede pedir más del doble de la meta diaria (según su peso).
+  // Lo que no entra queda como "faltante del mes" en vez de cargarse en los últimos días.
+  const capOf = (d) => baseline * maxDayMultiplier * d.weight;
+  for (const d of ahead) d.targetUsd = 0;
+  let left = remaining;
+  let open = ahead.filter((d) => d.weight > 0);
+  for (let guard = 0; left > 1e-9 && open.length && guard < 50; guard++) {
+    const wSum = open.reduce((a, d) => a + d.weight, 0);
+    let used = 0;
+    const next = [];
+    for (const d of open) {
+      const room = capOf(d) - d.targetUsd;
+      const add = Math.min((left * d.weight) / wSum, room);
+      d.targetUsd += add;
+      used += add;
+      if (room - add > 1e-9) next.push(d);
+    }
+    left -= used;
+    if (used < 1e-12) break;
+    open = next;
+  }
+  const shortfall = Math.max(0, left);
   for (const d of ahead) {
-    d.targetUsd = wSum > 0 ? (remaining * d.weight) / wSum : 0;
     d.targetFlower = usdPerFlowerNow ? d.targetUsd / usdPerFlowerNow : null;
+    d.capped = d.weight > 0 && d.targetUsd >= capOf(d) - 1e-9;
     if (capacityUsdDay) d.demanding = d.weight > 0 && d.targetUsd > capacityUsdDay * Math.max(1, d.weight) * 1.05;
   }
   const t = days[todayN - 1];
@@ -298,6 +319,8 @@ export function monthCalendar({ history, today, goalUsd, usdPerFlowerNow, cashou
     earnedPast,
     earnedToday: t.earnedUsd || 0,
     remaining,
+    shortfall,
+    daysLeft: daysInMonth - todayN + 1,
     forecast,
     days,
     doneCount: days.filter((d) => d.status === "done").length,
@@ -318,4 +341,26 @@ export function coverWithInventory(inventoryRows, flowerNeeded, max = 3) {
     left -= units * perUnit;
   }
   return { picks: out, covered: flowerNeeded - Math.max(0, left), short: Math.max(0, left) };
+}
+
+/* ---------- Últimos días ---------- */
+
+// Ganado por día (US$) en los últimos N días, contra la meta diaria de su mes (meta ÷ días del mes).
+export function dailySeries({ history, today, goalUsd, usdPerFlowerNow, cashout, days = 14 }) {
+  const snaps = history?.days || [];
+  if (snaps.length < 2 || !usdPerFlowerNow) return [];
+  const priceOf = (d) => (history?.flowerDaily?.[d] ? history.flowerDaily[d] * (1 - cashout) : usdPerFlowerNow);
+  const out = [];
+  for (let i = 1; i < snaps.length; i++) {
+    const a = snaps[i - 1];
+    const b = snaps[i];
+    if (b.day > today) continue;
+    const flower = Math.max(0, num(b.activity?.["SFL Earned"]) - num(a.activity?.["SFL Earned"]));
+    const [y, m] = b.day.split("-").map(Number);
+    const baseline = goalUsd / new Date(y, m, 0).getDate();
+    const usd = flower * priceOf(b.day);
+    const r = baseline > 0 ? usd / baseline : 0;
+    out.push({ day: b.day, flower, usd, baseline, ratio: r, today: b.day === today, status: b.day === today ? "today" : r >= 0.98 ? "done" : r >= 0.5 ? "partial" : "missed" });
+  }
+  return out.slice(-days);
 }

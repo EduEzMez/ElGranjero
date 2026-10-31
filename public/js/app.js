@@ -1,7 +1,7 @@
 import { CROPS, FRUITS, NODES, ANIMALS, BOOSTS, DEFAULTS, LABELS, CATEGORY_LABEL, SEASON_CROPS, SEASON_LABEL } from "./data.js";
 import { compute, detectFarm, fmt } from "./engine.js";
 import { icon } from "./icons.js";
-import { analyzeDeliveries, analyzeInventory, reservedByDeliveries, upcomingEvents, coinBounties, historyMetrics, monthCalendar, coverWithInventory } from "./insights.js";
+import { analyzeDeliveries, analyzeInventory, reservedByDeliveries, upcomingEvents, coinBounties, historyMetrics, monthCalendar, coverWithInventory, dailySeries } from "./insights.js";
 
 const LS_STATE = "dongranjero:state:v1";
 const LS_FARM = "dongranjero:farm:v1";
@@ -225,9 +225,13 @@ function recompute(animate = false) {
   result = compute({ state, detected, market: marketView() });
   buildInsights();
   applyRealFactor();
+  buildCalendar();
   renderHeader();
   renderStatus();
-  renderGoal(animate);
+  renderMonthHero(animate);
+  renderToday();
+  renderStreak();
+  renderDiag();
   renderFlower();
   renderAdvice();
   renderPlan();
@@ -314,31 +318,58 @@ function staleNote() {
 function renderStatus() {
   const rows = [];
   const stale = staleNote();
-  if (stale) rows.push(stale);
+  const chip = $("#freshChip");
+  if (stale && stale.cls !== "err") {
+    chip.hidden = false;
+    chip.innerHTML = `⏱ <span class="fresh-long">datos </span>${esc(ago(farmStaleAt).replace("hace ", ""))}`;
+    chip.title = stale.text;
+  } else {
+    chip.hidden = true;
+    if (stale) rows.push(stale);
+  }
   if (status.farm) rows.push({ text: status.farm, cls: /No se pudo/.test(status.farm) ? "err" : "ok" });
   if (status.market) rows.push({ text: status.market, cls: /No se|incompletos/.test(status.market) ? "err" : "ok" });
   $("#statusBar").innerHTML = rows.map((r) => `<div class="${r.cls}">${esc(r.text)}</div>`).join("");
 }
 
-function renderGoal(animate) {
-  const t = result.totals;
+/* ---------- Meta: este mes, hoy, últimos días y diagnóstico ---------- */
+
+const usdTxt = (n) => `US$ ${fmt(n, 2)}`;
+
+// 1. Este mes: lo ganado DE VERDAD contra la meta. La proyección va como frase, no en la barra.
+function renderMonthHero(animate) {
   const input = $("#targetUsd");
   if (document.activeElement !== input) input.value = state.targetUsd;
+  const cal = insights.calendar;
+  const meter = $("#plotMeter");
+  if (!cal) {
+    $("#mMonth").textContent = "Este mes";
+    $("#mEarned").textContent = "–";
+    $("#mOf").textContent = "";
+    meter.innerHTML = Array.from({ length: 20 }, () => `<span class="plot"></span>`).join("");
+    $("#goalNote").textContent = "Falta el precio de FLOWER para pasar lo ganado a dólares. Cargalo a mano en Ajustes si no aparece.";
+    $("#mSub").textContent = "";
+    return;
+  }
+  const earned = cal.earnedPast + cal.earnedToday;
+  const goal = cal.goal;
+  const ratio = goal > 0 ? earned / goal : 0;
+  const lastDay = cal.daysLeft <= 1;
+  $("#mMonth").textContent = `${MONTHS[cal.month - 1]} · ${lastDay ? "último día" : `quedan ${cal.daysLeft} días`}`;
+  $("#mEarned").textContent = usdTxt(earned);
+  $("#mOf").textContent = `ganados de ${usdTxt(goal)} (${Math.round(ratio * 100)}%)`;
 
-  const proj = $("#projUsd");
-  proj.textContent = t.usdMonth === null ? "–" : `US$ ${fmt(t.usdMonth, 2)}`;
-  const ratio = t.usdMonth === null ? 0 : t.usdMonth / Math.max(1, state.targetUsd);
-  proj.classList.toggle("ok", ratio >= 1);
-
+  // Parcelas: girasol = ya ganado; brote apagado = lo que sumarías a tu ritmo hasta fin de mes.
   const cells = 20;
   const filled = Math.min(cells, ratio * cells);
-  const meter = $("#plotMeter");
+  const forecastCells = cal.forecast != null && goal > 0 ? Math.min(cells, (cal.forecast / goal) * cells) : filled;
   meter.innerHTML = Array.from({ length: cells }, (_, i) => {
     if (i + 1 <= filled) return `<span class="plot fill" style="--i:${i}">${icon("Sunflower", { size: 40 })}</span>`;
     if (i < filled) return `<span class="plot part">${icon("sprout", { size: 40 })}</span>`;
+    if (i < forecastCells) return `<span class="plot ghost">${icon("sprout", { size: 40 })}</span>`;
     return `<span class="plot"></span>`;
   }).join("");
-  meter.setAttribute("aria-label", `Avance: ${Math.round(ratio * 100)}% de la meta`);
+  meter.setAttribute("aria-label", `Ganaste ${Math.round(ratio * 100)}% de la meta del mes`);
   if (animate) {
     meter.classList.remove("grow");
     void meter.offsetWidth;
@@ -346,14 +377,173 @@ function renderGoal(animate) {
   }
 
   const note = $("#goalNote");
-  const adj = t.realFactor ? ` Proyección ajustada a tu ritmo real (×${fmt(t.realFactor, 2)}).` : "";
-  if (t.usdMonth === null) note.textContent = "Falta el precio de FLOWER para convertir a dólares. Cargalo a mano en Ajustes si la API no responde.";
-  else if (ratio >= 1) note.textContent = `Cubrís el ${Math.round(ratio * 100)}% de la meta. Te sobran US$ ${fmt(t.usdMonth - state.targetUsd, 2)} por mes.${adj}`;
-  else note.textContent = `Cubrís el ${Math.round(ratio * 100)}% de la meta. Faltan US$ ${fmt(state.targetUsd - t.usdMonth, 2)} por mes.${adj}`;
+  if (earned >= goal) note.innerHTML = `<strong>¡Meta del mes cumplida!</strong> Lo que sumes de acá a fin de mes es extra.`;
+  else if (lastDay) note.innerHTML = `Hoy cierra ${MONTHS[cal.month - 1]}. Te faltan <strong>${usdTxt(goal - earned)}</strong>; mañana arranca un mes nuevo desde cero.`;
+  else if (cal.forecast != null)
+    note.innerHTML =
+      cal.forecast >= goal
+        ? `A tu ritmo terminás el mes en <strong>${usdTxt(cal.forecast)}</strong>: <strong>llegás</strong>.`
+        : `A tu ritmo terminás el mes en <strong>${usdTxt(cal.forecast)}</strong>: te faltarían <strong>${usdTxt(goal - cal.forecast)}</strong>.`;
+  else note.textContent = `Te faltan ${usdTxt(goal - earned)} para la meta del mes.`;
 
-  $("#kFlowerDay").textContent = fmt(t.netFlowerDay, 2);
-  $("#kNeeded").textContent = t.neededFlowerDay === null ? "–" : fmt(t.neededFlowerDay, 2);
-  $("#kCoins").textContent = fmt(t.coinsDay, 0);
+  const sub = [`<span class="legend">${icon("Sunflower", { size: 16 })}ganado</span><span class="legend">${icon("sprout", { size: 16 })}lo que sumarías a tu ritmo</span>`];
+  if (cal.prorated) sub.push(`<span class="subnote">Este mes cuenta desde el día ${cal.startN}, el primero con datos: por eso la meta es ${usdTxt(goal)} y no ${usdTxt(state.targetUsd)}.</span>`);
+  if (cal.shortfall > 0.005) sub.push(`<span class="subnote">${usdTxt(cal.shortfall)} ya no se recuperan este mes sin pedirte más del doble por día.</span>`);
+  $("#mSub").innerHTML = sub.join("");
+}
+
+// Acciones concretas para cubrir lo que falta (entregas, inventario, próximas cosechas).
+function buildTodo(missingFlower, dayKey) {
+  const items = [];
+  if (missingFlower > 0.01) {
+    for (const x of insights.deliveries.filter((d) => d.kind === "flower" && d.margin > 0 && d.haveAll).slice(0, 2)) {
+      items.push({ key: `deliv:${x.id}`, ico: icon("sack", { size: 20 }), text: `Completá la entrega de <strong class="npc">${esc(x.from)}</strong>`, val: x.rewardFlower });
+    }
+    const cover = coverWithInventory(insights.inventory.rows, Math.max(0, missingFlower - items.reduce((a, i) => a + i.val, 0)));
+    for (const p of cover.picks) items.push({ key: `sell:${p.item}`, ico: ic(p.item, 20), text: `Vendé <strong>${fmt(p.units, 0)} ${esc(label(p.item))}</strong>`, val: p.flower });
+  }
+  const tz = detected?.timezone || "America/Argentina/Buenos_Aires";
+  const soon = (history?.timers || []).filter((x) => !x.notified && x.readyAt > Date.now() - 3600e3 && x.readyAt < Date.now() + 12 * 3600e3).slice(0, 2);
+  for (const x of soon) {
+    const hm = new Date(x.readyAt).toLocaleTimeString("es-AR", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    items.push({ key: `harvest:${x.label}:${x.readyAt}`, ico: icon("bell", { size: 20 }), text: `Cosechá a las <strong>${hm}</strong>: ${esc(x.label)}`, val: null });
+  }
+  const checks = new Set(state.todoChecks?.[dayKey] || []);
+  return items.map((i) => ({ ...i, done: checks.has(i.key) }));
+}
+
+// 2. Hoy (o esta semana): meta, avance y qué hacer.
+function renderToday() {
+  const t = result.totals;
+  const cal = insights.calendar;
+  const period = state.metaPeriod === "week" ? "week" : "day";
+  $$("#periodSeg button").forEach((b) => b.classList.toggle("on", b.dataset.period === period));
+  const today = insights.today;
+  const usdPF = t.usdPerFlower;
+  if (!cal || !usdPF) {
+    $("#tTitle").textContent = "Hoy";
+    $("#tTarget").textContent = "Cuando haya precio de FLOWER y datos de la granja, acá vas a ver la meta del día y qué hacer.";
+    $("#tProgress").textContent = "";
+    $("#tBar").style.width = "0%";
+    $("#tTodo").innerHTML = "";
+    return;
+  }
+  const d = cal.days.find((x) => x.date === today);
+  let target;
+  let earnedUsd;
+  let title;
+  if (period === "week") {
+    // Semana de lunes a domingo; la meta es la meta diaria base × 7.
+    const now = new Date(today + "T12:00:00");
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    const mondayKey = monday.toISOString().slice(0, 10);
+    const weekSeries = (insights.series || []).filter((x) => x.day >= mondayKey && x.day <= today);
+    earnedUsd = weekSeries.reduce((a, x) => a + x.usd, 0);
+    if (!weekSeries.some((x) => x.day === today)) earnedUsd += d?.earnedUsd || 0;
+    target = cal.baseline * 7;
+    title = "Esta semana";
+  } else {
+    earnedUsd = d?.earnedUsd || 0;
+    target = d?.weight === 0 ? 0 : d?.targetUsd || 0;
+    title = "Hoy";
+  }
+  $("#tTitle").textContent = title;
+  const missingUsd = Math.max(0, target - earnedUsd);
+  const pct = target > 0 ? Math.min(100, Math.round((earnedUsd / target) * 100)) : 100;
+  if (period === "day" && d?.weight === 0) {
+    $("#tTarget").innerHTML = `Hoy está marcado como <strong>día libre</strong>. Su parte de la meta se reparte en los demás días.`;
+  } else {
+    $("#tTarget").innerHTML = `Meta ${period === "week" ? "de la semana" : "de hoy"}: <strong>${usdTxt(target)}</strong> <span class="muted">(${fmt(target / usdPF, 2)} FLOWER)</span>${
+      period === "day" && d?.capped ? ` <span class="muted">· con tope: no se te pide más del doble de lo normal</span>` : ""
+    }`;
+  }
+  $("#tBar").style.width = `${pct}%`;
+  $("#tProgress").innerHTML =
+    missingUsd <= 0.005
+      ? `<strong>¡Cumplida!</strong> Llevás ${usdTxt(earnedUsd)}. Lo que sumes de más aliviana los días que vienen.`
+      : `Llevás <strong>${usdTxt(earnedUsd)}</strong> (${pct}%). Te faltan <strong>${usdTxt(missingUsd)}</strong> ≈ ${fmt(missingUsd / usdPF, 2)} FLOWER.`;
+
+  const todo = buildTodo(missingUsd / usdPF, today);
+  $("#tTodo").innerHTML = todo.length
+    ? todo
+        .map(
+          (i) => `<li class="${i.done ? "done" : ""}"><label><input type="checkbox" data-todo="${esc(i.key)}" ${i.done ? "checked" : ""}>${i.ico}<span>${i.text}</span>${
+            i.val != null ? `<span class="todo-val">≈ ${usdTxt(i.val * usdPF)}</span>` : ""
+          }</label></li>`
+        )
+        .join("")
+    : `<li class="empty">${missingUsd <= 0.005 ? "No hace falta nada más por hoy." : "No encontré acciones concretas: revisá la pestaña Vender."}</li>`;
+}
+
+// 3. Últimos 14 días: barras de lo ganado contra la meta diaria.
+function renderStreak() {
+  const s = insights.series || [];
+  const box = $("#streakChart");
+  if (s.length < 1) {
+    box.innerHTML = `<p class="hint">Se completa a medida que el Worker guarda una foto por día. Con dos días ya aparece la primera barra.</p>`;
+    $("#streakSum").innerHTML = "";
+    return;
+  }
+  const w = 600;
+  const h = 150;
+  const pad = 24;
+  const max = Math.max(...s.map((x) => Math.max(x.usd, x.baseline)), 0.0001) * 1.1;
+  const bw = (w - pad * 2) / s.length;
+  const y = (v) => h - pad - (v / max) * (h - pad * 2);
+  const bars = s
+    .map((x, i) => {
+      const bh = Math.max(1.5, h - pad - y(x.usd));
+      const tip = `${fmtDate(x.day)}: ${usdTxt(x.usd)} de ${usdTxt(x.baseline)}`;
+      return `<rect class="b-${x.status}" x="${pad + i * bw + 3}" y="${h - pad - bh}" width="${Math.max(3, bw - 6)}" height="${bh}" rx="2"><title>${esc(tip)}</title></rect>`;
+    })
+    .join("");
+  const base = s.map((x, i) => `${i ? "L" : "M"}${(pad + i * bw).toFixed(1)},${y(x.baseline).toFixed(1)}H${(pad + (i + 1) * bw).toFixed(1)}`).join("");
+  box.innerHTML = `<svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Ganado por día contra la meta diaria">${bars}<path class="goal" d="${base}" fill="none"/>
+    <text x="${pad}" y="${h - 6}">${esc(fmtDate(s[0].day))}</text><text x="${w - pad}" y="${h - 6}" text-anchor="end">${esc(fmtDate(s.at(-1).day))}</text></svg>`;
+  const count = (st) => s.filter((x) => x.status === st).length;
+  $("#streakSum").innerHTML = `<span>${icon("Sunflower", { size: 18 })}${count("done")} cumplidos</span><span>${icon("sprout", { size: 18 })}${count("partial")} a medias</span><span>${icon(
+    "wilted",
+    { size: 18 }
+  )}${count("missed")} no alcanzados</span><span class="muted">Línea punteada: meta diaria (${usdTxt(s.at(-1).baseline)})</span>`;
+}
+
+// 4. Diagnóstico: por qué el plan y la realidad no coinciden, en palabras.
+function renderDiag() {
+  const t = result.totals;
+  const m = insights.metrics;
+  const box = $("#diagCard");
+  if (!t.usdPerFlower) {
+    box.innerHTML = "";
+    return;
+  }
+  const planUsd = t.planUsdMonth ?? t.usdMonth;
+  if (!m || m.span < 2) {
+    box.innerHTML = `<h3>${icon("trophy", { size: 22 })}Plan contra realidad</h3><p class="hint">El plan calcula que tu granja rinde ${usdTxt(planUsd)} por mes. Con 2 o 3 días de historial lo comparo con lo que ganás de verdad.</p>`;
+    return;
+  }
+  const realUsd = m.earnedPerDay * 30 * t.usdPerFlower;
+  const pct = planUsd > 0 ? Math.round((realUsd / planUsd) * 100) : 0;
+  const state_ = pct >= 90 ? "ok" : pct >= 50 ? "mid" : "low";
+  const msg =
+    pct >= 110
+      ? "Ganás más de lo que calcula el plan: probablemente sumás entregas, pesca u otras fuentes que el plan no incluye."
+      : pct >= 90
+        ? "El plan describe bien tu granja. Para crecer, mirá Inversión y Ranking."
+        : "Ganás bastante menos de lo que calcula el plan. Las causas más probables, en orden:";
+  const causes =
+    pct < 90
+      ? `<ol class="causes">
+          <li><strong>Producís pero no vendés.</strong> Lo guardado no cuenta como ganancia. <button type="button" class="btn ghost small" data-goto="vender">Ver qué vender</button></li>
+          <li><strong>El rendimiento real es menor que el de la tabla.</strong> Anotá un par de cosechas. <button type="button" class="btn ghost small" data-goto="granja">Calibrar</button></li>
+          <li><strong>Se pierden ciclos de cosecha.</strong> <button type="button" class="btn ghost small" data-goto="historial">Ver ritmo</button></li>
+          <li><strong>El contador del juego podría no incluir tus ventas del Marketplace.</strong> Si vendés algo y lo ganado no sube en la próxima actualización, la medición se queda corta.</li>
+        </ol>`
+      : "";
+  box.className = `diag ${state_}`;
+  box.innerHTML = `<h3>${icon("trophy", { size: 22 })}Plan contra realidad</h3>
+    <div class="diag-nums"><div><span>El plan calcula</span><strong>${usdTxt(planUsd)}/mes</strong></div><div><span>Estás ganando</span><strong>${usdTxt(realUsd)}/mes</strong></div><div><span>Diferencia</span><strong>${pct}% del plan</strong></div></div>
+    <p>${msg}</p>${causes}<p class="hint">Medido en los últimos ${fmt(m.span, 0)} días con los contadores del juego.</p>`;
 }
 
 function compact(n) {
@@ -593,12 +783,13 @@ function renderTables() {
 const MONTHS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 const WEEKDAYS = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"];
 
-function renderCalendar() {
+// Calcula el mes una sola vez: lo usan la tarjeta del mes, la de hoy y el calendario.
+function buildCalendar() {
   const t = result.totals;
   const today = insights.today;
+  insights.calendar = null;
   if (!today) return;
   const monthKey = today.slice(0, 7);
-
   // Reinicio mensual: se borran las marcas de días de meses anteriores.
   const w = state.dayWeights || {};
   const kept = Object.fromEntries(Object.entries(w).filter(([d]) => d.startsWith(monthKey)));
@@ -616,6 +807,7 @@ function renderCalendar() {
     history && autoUsd && usedUsd && usedUsd !== autoUsd
       ? { ...history, flowerDaily: Object.fromEntries(Object.entries(history.flowerDaily || {}).map(([d, v]) => [d, (v * usedUsd) / autoUsd])) }
       : history;
+  insights.scaledHistory = scaled;
   const cal = monthCalendar({
     history: scaled,
     today,
@@ -627,6 +819,18 @@ function renderCalendar() {
     capacityUsdDay,
   });
   insights.calendar = cal;
+  insights.series = dailySeries({ history: scaled, today, goalUsd: state.targetUsd, usdPerFlowerNow: t.usdPerFlower, cashout: (state.cashoutFee || 0) / 100, days: 14 });
+}
+
+function renderCalendar() {
+  const t = result.totals;
+  const today = insights.today;
+  if (!today) return;
+  const monthKey = today.slice(0, 7);
+
+  const cal = insights.calendar;
+  if (!cal) return;
+  const m = insights.metrics;
   if (!selectedDay || !selectedDay.startsWith(monthKey)) selectedDay = today;
 
   $("#calTitle").textContent = `${MONTHS[cal.month - 1]} ${cal.year}`;
@@ -1361,6 +1565,28 @@ function bind() {
   };
   $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   $("#settingsBtn").addEventListener("click", () => showTab("ajustes"));
+
+  $("#periodSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-period]");
+    if (!b) return;
+    state.metaPeriod = b.dataset.period;
+    saveState();
+    renderToday();
+  });
+  $("#tTodo").addEventListener("change", (e) => {
+    const key = e.target.dataset.todo;
+    if (!key) return;
+    const day = insights.today;
+    const cur = new Set(state.todoChecks?.[day] || []);
+    e.target.checked ? cur.add(key) : cur.delete(key);
+    state.todoChecks = { [day]: [...cur] }; // solo se guarda el día de hoy
+    saveState();
+    renderToday();
+  });
+  $("#diagCard").addEventListener("click", (e) => {
+    const go = e.target.closest("[data-goto]")?.dataset.goto;
+    if (go) $(`.tabs button[data-tab="${go}"]`)?.click();
+  });
 
   $("#calGrid").addEventListener("click", (e) => {
     const b = e.target.closest("[data-day]");

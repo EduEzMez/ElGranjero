@@ -27,6 +27,7 @@
       </div>
     </div>
     <div class="top-actions">
+      <span class="fresh" id="freshChip" hidden></span>
       <span class="price-pill" id="flowerPill" title="Precio de FLOWER en USD"><span data-icon="flowerToken" data-size="16"></span><span class="pill-k">FLOWER</span> <span id="flowerPrice">–</span></span>
       <button class="btn-icon" id="settingsBtn" type="button" aria-label="Ajustes"><span data-icon="gear" data-size="22"></span>
       </button>
@@ -53,26 +54,54 @@
       <!-- META -->
       <section class="view active" id="view-resumen" aria-labelledby="t-resumen">
         <h2 id="t-resumen" class="sr-only">Meta mensual</h2>
-        <div class="goal">
+        <!-- 1. Este mes: lo ganado de verdad contra la meta -->
+        <div class="goal" id="monthCard">
           <div class="goal-head">
+            <div class="won">
+              <span class="eyebrow" id="mMonth">Este mes</span>
+              <p class="won-line"><strong id="mEarned">–</strong> <span id="mOf">ganados</span></p>
+            </div>
             <label class="goal-input">
-              <span>Meta por mes</span>
+              <span>Meta mensual</span>
               <span class="money"><span aria-hidden="true">US$</span><input id="targetUsd" type="number" inputmode="decimal" min="1" step="1" aria-label="Meta mensual en dólares"></span>
             </label>
-            <div class="goal-proj">
-              <span>Proyección</span>
-              <strong id="projUsd">–</strong>
-            </div>
           </div>
-          <div class="plotmeter" id="plotMeter" role="img" aria-label="Avance hacia la meta"></div>
+          <div class="plotmeter" id="plotMeter" role="img" aria-label="Avance del mes"></div>
           <p class="goal-note" id="goalNote"></p>
-          <dl class="kpis">
-            <div><dt><span data-icon="flowerToken" data-size="14"></span>FLOWER neto por día</dt><dd id="kFlowerDay">–</dd></div>
-            <div><dt><span data-icon="Sunflower" data-size="14"></span>Necesitás por día</dt><dd id="kNeeded">–</dd></div>
-            <div><dt><span data-icon="coin" data-size="14"></span>Coins por día en semillas y herramientas</dt><dd id="kCoins">–</dd></div>
-          </dl>
+          <p class="hint" id="mSub"></p>
         </div>
 
+        <!-- 2. Hoy / esta semana: meta, avance y qué hacer -->
+        <div class="today" id="todayCard">
+          <div class="today-head">
+            <h3><span data-icon="Sunflower" data-size="22"></span><span id="tTitle">Hoy</span></h3>
+            <div class="seg" role="group" aria-label="Ver por día o por semana" id="periodSeg">
+              <button type="button" data-period="day">Día</button><button type="button" data-period="week">Semana</button>
+            </div>
+          </div>
+          <p class="today-target" id="tTarget"></p>
+          <div class="bigbar" aria-hidden="true"><i id="tBar"></i></div>
+          <p class="today-progress" id="tProgress"></p>
+          <ul class="todo" id="tTodo"></ul>
+        </div>
+
+        <!-- 3. Últimos 14 días -->
+        <div class="streak" id="streakCard">
+          <h3><span data-icon="hourglass" data-size="22"></span>Últimos 14 días</h3>
+          <div id="streakChart"></div>
+          <p class="streak-sum" id="streakSum"></p>
+        </div>
+
+        <!-- 4. Diagnóstico: plan contra realidad -->
+        <div class="diag" id="diagCard"></div>
+
+        <div class="block">
+          <h3><span data-icon="sprout" data-size="22"></span>Qué te conviene hacer</h3>
+          <ul class="advice" id="advice"></ul>
+        </div>
+
+        <details class="cal-wrap" id="calWrap">
+          <summary><span data-icon="calendar" data-size="22"></span><span>Planificar el mes <small>Marcá días libres o fuertes y mirá el detalle de cada día</small></span></summary>
         <div class="cal" id="calCard" aria-labelledby="t-cal">
           <div class="cal-head">
             <h3 id="t-cal"><span data-icon="calendar" data-size="22"></span><span id="calTitle">Calendario</span></h3>
@@ -84,6 +113,8 @@
           <div class="cal-detail" id="calDetail" aria-live="polite"></div>
         </div>
 
+        </details>
+
         <div class="flower" id="flowerCard" aria-labelledby="t-flower">
           <div class="flower-head">
             <h3 id="t-flower"><span data-icon="flowerToken" data-size="22"></span>Precio de FLOWER</h3>
@@ -92,11 +123,6 @@
           <p class="flower-price"><strong id="fUsd">–</strong> <span id="fArs"></span></p>
           <dl class="flower-stats" id="fStats"></dl>
           <p class="hint" id="fNote"></p>
-        </div>
-
-        <div class="block">
-          <h3><span data-icon="sprout" data-size="22"></span>Qué te conviene hacer</h3>
-          <ul class="advice" id="advice"></ul>
         </div>
 
         <div class="block">
