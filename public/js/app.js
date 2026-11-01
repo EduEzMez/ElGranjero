@@ -129,33 +129,85 @@ function ago(iso) {
 
 const FARM_MIN_AGE_MS = 5 * 60 * 1000;
 
+const LS_DIRECT = "dongranjero:direct:v1"; // lectura directa desde el navegador: queda solo en este dispositivo
+
+// Intenta leer la granja desde el navegador (tu conexión, no la de Cloudflare) y la sube a la base.
+async function directRead(id) {
+  const cfg = readLS(LS_DIRECT);
+  if (!cfg?.enabled || !cfg.key) return null;
+  let result;
+  try {
+    const res = await fetch(`https://api.sunflower-land.com/community/farms/${encodeURIComponent(id)}`, { headers: { "x-api-key": cfg.key } });
+    if (!res.ok) result = { error: res.status === 429 ? "La API limitó la consulta (429)" : `La API respondió ${res.status}` };
+    else {
+      const data = await res.json();
+      let uploaded = false;
+      const key = syncKey();
+      if (key) {
+        const up = await fetch(`/api/farm/${encodeURIComponent(id)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-sync-key": key },
+          body: JSON.stringify({ data }),
+        }).catch(() => null);
+        uploaded = !!up?.ok;
+      }
+      result = { data, uploaded };
+    }
+  } catch {
+    // Un error de red acá casi siempre es CORS: la API no permite pedidos desde páginas web.
+    result = { error: "Tu navegador no pudo leer la API directamente; probablemente el servidor no lo permite" };
+  }
+  writeLS(LS_DIRECT, { ...cfg, lastAt: new Date().toISOString(), lastOk: !!result.data, lastMsg: result.data ? (result.uploaded ? "Funcionó y se guardó en la base." : "Funcionó, pero sin clave de sincronización no se guardó en la base.") : result.error });
+  return result;
+}
+
+function applyFarm(id, fetchedAt, data, stale = false) {
+  farmPayload = { farmId: Number(id), fetchedAt, data };
+  writeLS(LS_FARM, farmPayload);
+  detected = detectFarm(data);
+  farmStaleAt = stale ? fetchedAt : null;
+}
+
 async function loadFarm(id, { force = false } = {}) {
   // Si los datos guardados tienen menos de 5 minutos, no se vuelve a consultar.
   const sameFarm = farmPayload?.farmId === Number(id);
   const age = farmPayload?.fetchedAt ? Date.now() - new Date(farmPayload.fetchedAt).getTime() : Infinity;
   if (!force && sameFarm && age < FARM_MIN_AGE_MS) return;
 
-  status.farm = `Cargando granja #${id}…`;
+  status.farm = force ? `Pidiendo datos frescos de la granja #${id}…` : `Cargando granja #${id}…`;
   renderStatus();
+
+  // Botón "Actualizar": primero desde el navegador (si está activado), después desde el servidor.
+  let directNote = "";
+  if (force) {
+    const direct = await directRead(id);
+    if (direct?.data) {
+      applyFarm(id, new Date().toISOString(), direct.data);
+      status.farm = direct.uploaded ? "Datos frescos, leídos desde tu navegador." : "Datos frescos, leídos desde tu navegador (sin sincronización el bot no los ve todavía).";
+      return;
+    }
+    if (direct?.error) directNote = ` Lectura desde el navegador: ${direct.error}.`;
+  }
+
   try {
-    const res = await fetch(`/api/farm/${encodeURIComponent(id)}`);
+    const res = await fetch(`/api/farm/${encodeURIComponent(id)}${force ? "?fresh=1" : ""}`);
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       const err = new Error([body.error, body.hint].filter(Boolean).join(". ") || `Error ${res.status}`);
       err.status = res.status;
       throw err;
     }
-    farmPayload = { farmId: Number(id), fetchedAt: body.fetchedAt, data: body.data };
-    writeLS(LS_FARM, farmPayload);
-    detected = detectFarm(body.data);
-    farmStaleAt = body.stale ? body.fetchedAt : null;
-    status.farm = "";
+    if (body.data) applyFarm(id, body.fetchedAt, body.data, !!body.stale);
+    const m = body.manual;
+    if (!m) status.farm = "";
+    else if (m.ok) status.farm = "Datos frescos de la granja, recién leídos.";
+    else if (m.reason === "pronto") status.farm = `Ya se pidieron datos hace un momento: esperá ${m.waitS} s y volvé a tocar Actualizar.${directNote}`;
+    else if (m.reason === "limite")
+      status.farm = `No se pudo: la API de Sunflower Land rechazó la consulta 3 veces seguidas (429). Seguís viendo los datos ${body.fetchedAt ? `de ${ago(body.fetchedAt)}` : "guardados"}. Probá en un par de minutos.${directNote}`;
+    else status.farm = `No se pudo actualizar la granja (${m.detail || "error"}).${directNote}`;
   } catch (err) {
     if (sameFarm && farmPayload?.data) {
-      status.farm =
-        err.status === 429
-          ? `La API de Sunflower Land está limitando consultas: se muestran tus datos guardados de ${ago(farmPayload.fetchedAt)}. Probá de nuevo en unos minutos.`
-          : `No se pudo actualizar la granja (${err.message.replace(/\.+$/, "")}). Se muestran tus datos guardados de ${ago(farmPayload.fetchedAt)}.`;
+      status.farm = `No se pudo actualizar la granja (${err.message.replace(/\.+$/, "")}). Se muestran tus datos guardados de ${ago(farmPayload.fetchedAt)}.${directNote}`;
     } else {
       status.farm = `No se pudo cargar la granja: ${err.message.replace(/\.+$/, "")}. Podés cargar las cantidades a mano en la pestaña Granja.`;
     }
@@ -201,7 +253,9 @@ async function refreshAll(force = false) {
   btn.classList.add("spin");
   btn.disabled = true;
   await pullSettings();
-  await Promise.all([loadFarm(state.farmId, { force }), loadMarket(), loadHistory()]);
+  // La granja va primero: si el botón trajo datos frescos, el historial se lee ya con ellos.
+  await Promise.all([loadFarm(state.farmId, { force }), loadMarket()]);
+  await loadHistory();
   btn.classList.remove("spin");
   btn.disabled = false;
   recompute(true);
@@ -1518,6 +1572,15 @@ function renderSettings() {
   $("#priceAlerts").checked = state.priceAlerts !== false;
   setVal("#priceAlertPct", state.priceAlertPct);
   setVal("#flowerAlertPct", state.flowerAlertPct);
+  const dc = readLS(LS_DIRECT) || {};
+  $("#directEnabled").checked = !!dc.enabled;
+  const dk = $("#directKey");
+  if (document.activeElement !== dk) dk.value = dc.key || "";
+  $("#directStatus").textContent = dc.lastAt
+    ? `Último intento ${ago(dc.lastAt)}: ${dc.lastMsg || ""}`
+    : dc.enabled
+      ? "Activada. Se usa al tocar el botón Actualizar."
+      : "Desactivada.";
   const sk = $("#syncKey");
   if (document.activeElement !== sk) sk.value = syncKey();
   $("#syncStatus").textContent = syncStatus || (syncKey() ? "" : "Sin clave: los ajustes quedan solo en este navegador y el bot usa valores por defecto.");
@@ -1763,6 +1826,14 @@ function bind() {
 
   numBind("#priceAlertPct", "priceAlertPct", { min: 1, max: 100 });
   numBind("#flowerAlertPct", "flowerAlertPct", { min: 1, max: 100 });
+
+  $("#directForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const key = $("#directKey").value.trim();
+    const enabled = $("#directEnabled").checked && !!key;
+    writeLS(LS_DIRECT, { ...(readLS(LS_DIRECT) || {}), enabled, key });
+    renderSettings();
+  });
 
   $("#syncForm").addEventListener("submit", async (e) => {
     e.preventDefault();

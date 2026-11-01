@@ -322,6 +322,15 @@
         </form>
         <p class="hint" id="syncStatus"></p>
 
+        <h3 class="mt"><span data-icon="bolt" data-size="22"></span>Lectura directa desde tu navegador (experimental)</h3>
+        <p class="hint">Al tocar Actualizar, la web intenta leer tu granja desde tu propia conexión en vez de los servidores de Cloudflare, que comparten dirección con otros usuarios y suelen recibir el límite de la API. Funciona solo si la API acepta pedidos desde páginas web: si no, se usa el servidor como siempre. Tu API key queda guardada solo en este dispositivo.</p>
+        <form class="farm-id" id="directForm" autocomplete="off">
+          <label class="field inline"><span>API key de Sunflower Land</span><input id="directKey" type="password" autocomplete="off" placeholder="sfl.…"></label>
+          <label class="check"><input type="checkbox" id="directEnabled"> <span>Activar</span></label>
+          <button class="btn" type="submit">Guardar</button>
+        </form>
+        <p class="hint" id="directStatus"></p>
+
         <h3 class="mt"><span data-icon="bell" data-size="22"></span>Telegram</h3>
         <label class="check"><input type="checkbox" id="weeklySummary"> <span>Resumen semanal los domingos a la noche</span></label>
         <label class="check"><input type="checkbox" id="priceAlerts"> <span>Alertas de precio</span></label>

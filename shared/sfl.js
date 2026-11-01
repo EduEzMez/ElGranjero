@@ -263,3 +263,26 @@ export async function saveTimers(db, id, timers) {
   stmts.push(db.prepare("DELETE FROM timers WHERE farm_id = ? AND ready_at < ?").bind(Number(id), now - 3 * 86400e3));
   await db.batch(stmts);
 }
+
+/* ---------- Guardar una lectura nueva (botón "Actualizar" o lectura desde el navegador) ---------- */
+
+export async function writeMetaKV(db, obj) {
+  await db.batch(
+    Object.entries(obj).map(([k, v]) =>
+      db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(k, String(v ?? ""))
+    )
+  );
+}
+
+// Guarda granja, foto del día, ventas y avisos, y le avisa al Worker que ya hay datos frescos
+// (así no reintenta enseguida ni sigue esperando por un 429 viejo).
+export async function storeFarm(db, id, data, tz, source = "manual") {
+  const farm = farmOf(data);
+  const at = new Date().toISOString();
+  await writeLatestFarm(db, id, data, at);
+  await saveSnapshot(db, id, farm, tz);
+  await saveSales(db, id, farm);
+  await saveTimers(db, id, computeTimers(farm, tz));
+  await writeMetaKV(db, { lastFarmAt: at, lastFarmOkAt: at, lastFarmError: "", farmStrikes: "0", farmBlockedUntil: "0", lastManualSource: source });
+  return at;
+}
